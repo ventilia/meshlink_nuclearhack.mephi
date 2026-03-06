@@ -17,6 +17,8 @@ import com.example.meshlink.domain.model.message.MessageState
 import com.example.meshlink.network.AudioPlaybackManager
 import com.example.meshlink.network.CallManager
 import com.example.meshlink.network.NetworkManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.io.File
@@ -28,6 +30,12 @@ class ChatViewModel(
 
     companion object {
         private const val TAG = "ChatViewModel"
+        /**
+         * Таймаут исходящего звонка: если за 30 секунд не пришёл ответ —
+         * автоматически снимаем оверлей «Звоним...».
+         * ИСПРАВЛЕНО: раньше оверлей мог висеть бесконечно.
+         */
+        private const val OUTGOING_CALL_TIMEOUT_MS = 30_000L
     }
 
     private val container       = (application as MeshLinkApp).container
@@ -53,6 +61,9 @@ class ChatViewModel(
 
     /** Текущий воспроизводимый аудио-файл (для Play/Pause кнопки) */
     val playingFile: StateFlow<String?> = audioPlayback.playingFile
+
+    /** Job для таймаута исходящего звонка */
+    private var outgoingCallTimeoutJob: Job? = null
 
     /** Имя контакта: сначала локальный alias, потом profile.username */
     val contactName: StateFlow<String?> = combine(
@@ -101,8 +112,22 @@ class ChatViewModel(
     }
 
     private fun observeCallSignals() {
+        /**
+         * ИСПРАВЛЕНО: Заменили collectLatest на collect для сигналов звонка.
+         *
+         * collectLatest отменял предыдущий блок при каждом новом emit.
+         * Это приводило к тому, что если callResponse приходил почти одновременно
+         * с callEnd, один из сигналов терялся. Например:
+         * - Пир отклоняет звонок → callResponse(accepted=false) emit
+         * - Почти сразу callEnd emit
+         * - collectLatest отменял обработку первого, не успев сбросить _outgoingCall
+         * - UI у звонящего навсегда застрял на оверлее «Звоним...»
+         *
+         * collect обрабатывает каждый emit по очереди, ничего не теряется.
+         * SharedFlow с replay=1 в NetworkManager гарантирует получение последнего значения.
+         */
         viewModelScope.launch {
-            networkManager.callRequest.collectLatest { req ->
+            networkManager.callRequest.collect { req ->
                 if (req != null && req.senderId == peerId) {
                     MeshLogger.звонокВходящий(peerId)
                     Log.i(TAG, "Входящий звонок от ${peerId.take(8)}")
@@ -111,9 +136,14 @@ class ChatViewModel(
                 }
             }
         }
+
         viewModelScope.launch {
-            networkManager.callResponse.collectLatest { res ->
+            networkManager.callResponse.collect { res ->
                 if (res != null && res.senderId == peerId) {
+                    Log.i(TAG, "callResponse от ${peerId.take(8)}: accepted=${res.accepted}")
+                    // Отменяем таймаут — ответ пришёл
+                    outgoingCallTimeoutJob?.cancel()
+                    outgoingCallTimeoutJob = null
                     stopRingtone()
                     if (res.accepted) {
                         MeshLogger.звонокПринят(peerId)
@@ -121,19 +151,33 @@ class ChatViewModel(
                         startActiveCall()
                     } else {
                         MeshLogger.звонокОтклонён(peerId)
+                        // ИСПРАВЛЕНО: явно сбрасываем оба флага независимо от
+                        // текущего состояния, чтобы UI точно обновился
                         _outgoingCall.value = false
-                        endCall()
+                        _callActive.value = false
+                        networkManager.resetCallState()
                     }
                 }
             }
         }
+
         viewModelScope.launch {
-            networkManager.callEnd.collectLatest { end ->
+            networkManager.callEnd.collect { end ->
                 if (end != null && end.senderId == peerId) {
                     MeshLogger.звонокЗавершён(peerId, "удалённый пир")
+                    Log.i(TAG, "callEnd от ${peerId.take(8)}")
+                    // Отменяем таймаут если был
+                    outgoingCallTimeoutJob?.cancel()
+                    outgoingCallTimeoutJob = null
                     stopRingtone()
+                    // ИСПРАВЛЕНО: сбрасываем все состояния звонка независимо от того,
+                    // какой из флагов был активен (входящий/исходящий/активный)
                     _outgoingCall.value = false
-                    endCall()
+                    _incomingCall.value = null
+                    _callActive.value = false
+                    callManager.stopRecording()
+                    callManager.stopPlaying()
+                    networkManager.resetCallState()
                 }
             }
         }
@@ -283,6 +327,22 @@ class ChatViewModel(
         MeshLogger.звонокИсходящий(peerId)
         _outgoingCall.value = true
         networkManager.sendCallRequest(peerId)
+
+        /**
+         * ИСПРАВЛЕНО: Таймаут исходящего звонка.
+         * Если за 30 секунд ответа нет — автоматически убираем оверлей.
+         * Раньше оверлей «Звоним...» мог висеть вечно, если пакет ответа потерялся.
+         */
+        outgoingCallTimeoutJob?.cancel()
+        outgoingCallTimeoutJob = viewModelScope.launch {
+            delay(OUTGOING_CALL_TIMEOUT_MS)
+            if (_outgoingCall.value) {
+                Log.w(TAG, "Таймаут исходящего звонка к ${peerId.take(8)}")
+                MeshLogger.звонокЗавершён(peerId, "таймаут")
+                _outgoingCall.value = false
+                networkManager.resetCallState()
+            }
+        }
     }
 
     fun acceptCall() {
@@ -301,6 +361,8 @@ class ChatViewModel(
     }
 
     fun endCall() {
+        outgoingCallTimeoutJob?.cancel()
+        outgoingCallTimeoutJob = null
         if (_callActive.value || _outgoingCall.value) {
             MeshLogger.звонокЗавершён(peerId, "локально")
             networkManager.sendCallEnd(peerId)
@@ -310,6 +372,7 @@ class ChatViewModel(
         callManager.stopPlaying()
         _callActive.value = false
         _outgoingCall.value = false
+        _incomingCall.value = null
         networkManager.resetCallState()
     }
 
@@ -326,6 +389,7 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        outgoingCallTimeoutJob?.cancel()
         if (_callActive.value) endCall()
         stopRingtone()
         audioPlayback.release()

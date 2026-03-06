@@ -34,7 +34,8 @@ class AppDataContainer(activity: MainActivity) : AppContainer {
     private val db by lazy { AppDatabase.get(context) }
 
     override val chatRepository: ChatRepository by lazy {
-        ChatLocalRepository(db.accountDao(), db.profileDao(), db.messageDao())
+        // ИСПРАВЛЕНО: передаём aliasDao чтобы список чатов показывал alias-имена
+        ChatLocalRepository(db.accountDao(), db.profileDao(), db.messageDao(), db.aliasDao())
     }
 
     override val contactRepository: ContactRepository by lazy {

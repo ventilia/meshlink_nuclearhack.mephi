@@ -1,5 +1,8 @@
 package com.example.meshlink.ui.screen
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,30 +18,47 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
 import com.example.meshlink.ui.theme.*
 import com.example.meshlink.ui.viewmodel.SettingsViewModel
+import java.io.File
 
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
     viewModel: SettingsViewModel = viewModel()
 ) {
-    val username      by viewModel.username.collectAsState()
-    val peerCount     by viewModel.peerCount.collectAsState()
-    val meshRouteCount by viewModel.meshRouteCount.collectAsState()
-    val isWifiOn      by viewModel.isWifiDirectEnabled.collectAsState()
-    val ownPeerId     by viewModel.ownPeerId.collectAsState()
-    val ownShortCode  by viewModel.ownShortCode.collectAsState()
-    val coreVersion   by viewModel.coreVersion.collectAsState()
-    val rustRouteCount by viewModel.rustRouteCount.collectAsState()
+    val username          by viewModel.username.collectAsState()
+    val profileImageFileName by viewModel.profileImageFileName.collectAsState()
+    val peerCount         by viewModel.peerCount.collectAsState()
+    val meshRouteCount    by viewModel.meshRouteCount.collectAsState()
+    val isWifiOn          by viewModel.isWifiDirectEnabled.collectAsState()
+    val ownPeerId         by viewModel.ownPeerId.collectAsState()
+    val ownShortCode      by viewModel.ownShortCode.collectAsState()
+    val coreVersion       by viewModel.coreVersion.collectAsState()
+    val rustRouteCount    by viewModel.rustRouteCount.collectAsState()
 
     var editingUsername by remember { mutableStateOf(false) }
-    var usernameInput  by remember(username) { mutableStateOf(username) }
+    var usernameInput   by remember(username) { mutableStateOf(username) }
+    var showRemovePhotoDialog by remember { mutableStateOf(false) }
+
+    /**
+     * Пикер изображения из галереи.
+     * Выбранный URI передаётся во ViewModel, который сохраняет файл
+     * и обновляет imageFileName в профиле.
+     */
+    val imagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.setProfileImage(it) }
+    }
 
     Column(
         modifier = Modifier
@@ -51,9 +71,7 @@ fun SettingsScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(listOf(Color(0xFF0D1117), Color(0xFF0A0A0F)))
-                )
+                .background(Brush.verticalGradient(listOf(Color(0xFF0D1117), Color(0xFF0A0A0F))))
                 .border(1.dp, PixelBorder)
                 .padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -86,7 +104,6 @@ fun SettingsScreen(
 
         // ── МОЙ ПРОФИЛЬ ────────────────────────────────────────────────────────
         SettingsCard("// МОЙ ПРОФИЛЬ") {
-            // Аватар + short code
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -95,28 +112,60 @@ fun SettingsScreen(
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Аватар
+                /**
+                 * Аватар — если фото установлено, показываем его через AsyncImage.
+                 * Если нет — показываем первую букву имени.
+                 * По клику — открываем пикер изображения.
+                 * По долгому удержанию — удалить фото (через диалог).
+                 */
                 Box(
                     modifier = Modifier
-                        .size(60.dp)
+                        .size(70.dp)
                         .clip(CircleShape)
-                        .background(
-                            Brush.linearGradient(listOf(PixelAccentDark, PixelPurple))
-                        )
-                        .border(2.dp, PixelAccent.copy(alpha = 0.5f), CircleShape),
+                        .background(Brush.linearGradient(listOf(PixelAccentDark, PixelPurple)))
+                        .border(2.dp, PixelAccent.copy(alpha = 0.5f), CircleShape)
+                        .clickable { imagePicker.launch("image/*") },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = username.take(1).uppercase().ifBlank { "?" },
-                        fontFamily = PressStart2PFamily,
-                        fontSize = 20.sp,
-                        color = PixelText
-                    )
+                    val imageFile = profileImageFileName?.takeIf { it.isNotBlank() }
+                    if (imageFile != null) {
+                        AsyncImage(
+                            model = "/data/data/com.example.meshlink/files/$imageFile",
+                            contentDescription = "Фото профиля",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize().clip(CircleShape)
+                        )
+                        // Оверлей «редактировать» поверх фото
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.3f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = MeshIcons.Edit,
+                                contentDescription = "Изменить фото",
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    } else {
+                        // Нет фото — показываем букву и иконку камеры
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = username.take(1).uppercase().ifBlank { "?" },
+                                fontFamily = PressStart2PFamily,
+                                fontSize = 20.sp,
+                                color = PixelText
+                            )
+                        }
+                    }
                 }
 
                 Spacer(Modifier.width(16.dp))
 
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = ownShortCode,
                         fontFamily = PressStart2PFamily,
@@ -136,6 +185,40 @@ fun SettingsScreen(
                         fontFamily = PressStart2PFamily,
                         fontSize = 8.sp,
                         color = PixelText
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    // Подсказка по фото
+                    Text(
+                        text = if (profileImageFileName.isNullOrBlank())
+                            "нажмите на аватар чтобы добавить фото"
+                        else
+                            "нажмите на аватар чтобы изменить фото",
+                        fontFamily = PressStart2PFamily,
+                        fontSize = 5.sp,
+                        color = PixelTextHint,
+                        lineHeight = 9.sp
+                    )
+                }
+            }
+
+            // Кнопка удалить фото — только если фото установлено
+            if (!profileImageFileName.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PixelWarn.copy(alpha = 0.1f))
+                        .border(1.dp, PixelWarn.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                        .clickable { showRemovePhotoDialog = true }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "УДАЛИТЬ ФОТО",
+                        fontFamily = PressStart2PFamily,
+                        fontSize = 6.sp,
+                        color = PixelWarn
                     )
                 }
             }
@@ -274,6 +357,58 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(24.dp))
     }
+
+    // ── Диалог подтверждения удаления фото ───────────────────────────────────
+    if (showRemovePhotoDialog) {
+        AlertDialog(
+            onDismissRequest = { showRemovePhotoDialog = false },
+            containerColor = Color(0xFF0D1117),
+            shape = RoundedCornerShape(12.dp),
+            title = {
+                Text(
+                    "УДАЛИТЬ ФОТО",
+                    fontFamily = PressStart2PFamily,
+                    fontSize = 10.sp,
+                    color = PixelWarn
+                )
+            },
+            text = {
+                Text(
+                    "Удалить фото профиля?\nДругие пользователи увидят\nизменение при следующем\nподключении.",
+                    fontFamily = PressStart2PFamily,
+                    fontSize = 7.sp,
+                    color = PixelText,
+                    lineHeight = 14.sp
+                )
+            },
+            confirmButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PixelWarn)
+                        .clickable {
+                            viewModel.removeProfileImage()
+                            showRemovePhotoDialog = false
+                        }
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text("УДАЛИТЬ", fontFamily = PressStart2PFamily, fontSize = 7.sp, color = Color.White)
+                }
+            },
+            dismissButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PixelMidGray)
+                        .border(1.dp, PixelBorder, RoundedCornerShape(8.dp))
+                        .clickable { showRemovePhotoDialog = false }
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text("ОТМЕНА", fontFamily = PressStart2PFamily, fontSize = 7.sp, color = PixelTextDim)
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -320,7 +455,7 @@ fun SettingsRow(
             fontSize = 7.sp,
             color = valueColor,
             maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

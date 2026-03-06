@@ -1,6 +1,7 @@
 package com.example.meshlink.ui.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.meshlink.MeshLinkApp
@@ -17,11 +18,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         .map { it.username }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
+    /**
+     * Имя файла фото профиля (null если не установлено).
+     * Файл физически лежит в filesDir под этим именем.
+     */
+    val profileImageFileName: StateFlow<String?> = container.ownProfileRepository
+        .getProfileAsFlow()
+        .map { it.imageFileName }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     val peerCount: StateFlow<Int> = container.networkManager.connectedDevices
         .map { it.size }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    /** Количество mesh-маршрутов (через relay) */
     val meshRouteCount: StateFlow<Int> = container.networkManager.connectedDevices
         .map { devices -> devices.values.count { it.hopCount > 1 } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -29,14 +38,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val isWifiDirectEnabled: StateFlow<Boolean> =
         container.networkManager.receiver.isWifiDirectEnabled
 
-    /** Собственный peerId из NetworkManager (живёт в памяти, стабилен после init) */
     val ownPeerId: StateFlow<String> = container.networkManager.ownPeerIdFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
-    /**
-     * ShortCode — из Rust ядра (если инициализировано) или первые 4 символа peerId.
-     * Именно это видят другие устройства.
-     */
     val ownShortCode: StateFlow<String> = ownPeerId
         .map { peerId ->
             if (NativeCore.isInitialized()) NativeCore.getOwnShortCode()
@@ -45,12 +49,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "----")
 
-    /** Версия Rust ядра */
     val coreVersion: StateFlow<String> = ownPeerId
         .map { if (NativeCore.isInitialized()) NativeCore.getVersion() else "N/A" }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "N/A")
 
-    /** Количество маршрутов в Rust routing table */
     val rustRouteCount: StateFlow<Int> = ownPeerId
         .map { if (NativeCore.isInitialized()) NativeCore.getRouteCount() else 0 }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -59,7 +61,36 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         if (username.isBlank()) return
         viewModelScope.launch {
             container.ownProfileRepository.setUsername(username)
-            // Имя хранится в профиле — Rust ядро не нужно перезапускать
+        }
+    }
+
+    /**
+     * Сохраняет фото профиля из URI (выбранного через галерею/камеру).
+     *
+     * Алгоритм:
+     * 1. Копируем файл в filesDir через FileManager
+     * 2. Обновляем imageFileName в OwnProfileRepository (DataStore)
+     * 3. NetworkManager при следующем keepalive/profile-exchange отправит
+     *    обновлённый профиль соседним пирам
+     */
+    fun setProfileImage(uri: Uri) {
+        viewModelScope.launch {
+            val peerId = ownPeerId.value.ifBlank { "own" }
+            val fileName = container.fileManager.saveProfileImage(uri, peerId)
+            if (fileName != null) {
+                container.ownProfileRepository.setImageFileName(fileName)
+            }
+        }
+    }
+
+    /** Удалить фото профиля */
+    fun removeProfileImage() {
+        viewModelScope.launch {
+            val currentFile = profileImageFileName.value
+            if (currentFile != null) {
+                container.fileManager.getFile(currentFile).delete()
+            }
+            container.ownProfileRepository.setImageFileName("")
         }
     }
 }

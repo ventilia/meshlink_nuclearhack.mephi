@@ -29,7 +29,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -55,9 +54,6 @@ import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
-import androidx.compose.foundation.Image
 
 // ─── Хелпер: проверка, является ли файл изображением ─────────────────────────
 private fun String.isImageFile(): Boolean {
@@ -86,7 +82,6 @@ fun ChatScreen(
     val isOnline     by viewModel.isOnline.collectAsState()
     val hopCount     by viewModel.hopCount.collectAsState()
     val ownPeerId    by viewModel.ownPeerId.collectAsState()
-    val currentAlias by viewModel.currentAlias.collectAsState()
     val playingFile  by viewModel.playingFile.collectAsState()
 
     var showAliasDialog by remember { mutableStateOf(false) }
@@ -106,38 +101,104 @@ fun ChatScreen(
     }
     LaunchedEffect(peerId) { viewModel.markAllRead(peerId) }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
+    /**
+     * ИСПРАВЛЕНО: Баг с клавиатурой.
+     *
+     * Проблема: imePadding() применялся на Column внутри Box.
+     * При открытии клавиатуры система сжимала Column, но Box оставался
+     * полноэкранным. В результате нижняя панель ввода «улетала» наверх
+     * вместе со всем контентом, а не просто поднималась над клавиатурой.
+     *
+     * Решение: используем Scaffold с bottomBar. Scaffold корректно
+     * обрабатывает WindowInsets — панель ввода всегда прижата к низу,
+     * а при появлении клавиатуры она поднимается ровно на высоту IME,
+     * не двигая список сообщений лишний раз.
+     *
+     * WindowInsets.systemBars применяем только на TopBar через его padding.
+     */
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(PixelBlack)
+            .imePadding(),
+        containerColor = PixelBlack,
+        topBar = {
+            // Системные insets применяем здесь, чтобы контент не залезал под статусбар
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+            ) {
+                ChatTopBar(
+                    contactName = contactName ?: peerId.take(8).uppercase(),
+                    isOnline = isOnline,
+                    hopCount = hopCount,
+                    callActive = callActive,
+                    onBack = onBack,
+                    onCallClick = { if (callActive) viewModel.endCall() else viewModel.requestCall() },
+                    onRenameClick = { showAliasDialog = true }
+                )
+                // Баннер активного звонка идёт сразу под TopBar
+                AnimatedVisibility(
+                    visible = callActive,
+                    enter = slideInVertically() + fadeIn(),
+                    exit = slideOutVertically() + fadeOut()
+                ) {
+                    ActiveCallBanner(onEndCall = { viewModel.endCall() })
+                }
+            }
+        },
+        bottomBar = {
+            /**
+             * ИСПРАВЛЕНО: bottomBar в Scaffold — панель ввода всегда
+             * находится внизу и поднимается только на высоту клавиатуры,
+             * не двигая список сообщений.
+             */
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+            ) {
+                MessageInputBar(
+                    inputText = inputText,
+                    isRecording = isRecording,
+                    isOnline = isOnline,
+                    onTextChange = { inputText = it },
+                    onSendText = {
+                        if (inputText.isNotBlank()) {
+                            viewModel.sendText(peerId, inputText.trim())
+                            inputText = ""
+                        }
+                    },
+                    onAttachFile = { filePicker.launch("*/*") },
+                    onRecordStart = {
+                        val granted = ContextCompat.checkSelfPermission(
+                            context, Manifest.permission.RECORD_AUDIO
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        if (granted) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.startRecording(context)
+                        } else {
+                            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    onRecordStop = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        viewModel.stopRecordingAndSend(peerId)
+                    }
+                )
+            }
+        }
+    ) { paddingValues ->
+        // Список сообщений занимает всё пространство между топбаром и боттомбаром
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(PixelBlack)
-                .windowInsetsPadding(WindowInsets.systemBars)
-                .imePadding()
+                .padding(paddingValues)
         ) {
-            // ── TopBar ───────────────────────────────────────────────────────
-            ChatTopBar(
-                contactName = contactName ?: peerId.take(8).uppercase(),
-                isOnline = isOnline,
-                hopCount = hopCount,
-                callActive = callActive,
-                onBack = onBack,
-                onCallClick = { if (callActive) viewModel.endCall() else viewModel.requestCall() },
-                onRenameClick = { showAliasDialog = true }
-            )
-
-            // ── Активный звонок — баннер ─────────────────────────────────────
-            AnimatedVisibility(
-                visible = callActive,
-                enter = slideInVertically() + fadeIn(),
-                exit = slideOutVertically() + fadeOut()
-            ) {
-                ActiveCallBanner(onEndCall = { viewModel.endCall() })
-            }
-
-            // ── Сообщения ────────────────────────────────────────────────────
             LazyColumn(
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxSize()
                     .padding(horizontal = 8.dp),
                 state = listState,
                 contentPadding = PaddingValues(vertical = 8.dp)
@@ -216,65 +277,36 @@ fun ChatScreen(
                 }
             }
 
-            // ── Панель ввода ─────────────────────────────────────────────────
-            MessageInputBar(
-                inputText = inputText,
-                isRecording = isRecording,
-                isOnline = isOnline,
-                onTextChange = { inputText = it },
-                onSendText = {
-                    if (inputText.isNotBlank()) {
-                        viewModel.sendText(peerId, inputText.trim())
-                        inputText = ""
-                    }
-                },
-                onAttachFile = { filePicker.launch("*/*") },
-                onRecordStart = {
-                    val granted = ContextCompat.checkSelfPermission(
-                        context, Manifest.permission.RECORD_AUDIO
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                    if (granted) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        viewModel.startRecording(context)
-                    } else {
-                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }
-                },
-                onRecordStop = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    viewModel.stopRecordingAndSend(peerId)
-                }
-            )
-        }
+            // ── Входящий звонок ──────────────────────────────────────────────────
+            if (incomingCall != null) {
+                IncomingCallOverlay(
+                    callerName = contactName ?: peerId.take(8).uppercase(),
+                    onAccept = { viewModel.acceptCall() },
+                    onReject = { viewModel.rejectCall() }
+                )
+            }
 
-        // ── Входящий звонок ──────────────────────────────────────────────────
-        if (incomingCall != null) {
-            IncomingCallOverlay(
-                callerName = contactName ?: peerId.take(8).uppercase(),
-                onAccept = { viewModel.acceptCall() },
-                onReject = { viewModel.rejectCall() }
-            )
-        }
+            // ── Исходящий звонок ─────────────────────────────────────────────────
+            if (outgoingCall) {
+                OutgoingCallOverlay(
+                    calleeName = contactName ?: peerId.take(8).uppercase(),
+                    onCancel = { viewModel.endCall() }
+                )
+            }
 
-        // ── Исходящий звонок ─────────────────────────────────────────────────
-        if (outgoingCall) {
-            OutgoingCallOverlay(
-                calleeName = contactName ?: peerId.take(8).uppercase(),
-                onCancel = { viewModel.endCall() }
-            )
-        }
-
-        // ── Полноэкранное изображение ────────────────────────────────────────
-        fullscreenImage?.let { file ->
-            FullscreenImageViewer(
-                file = file,
-                onDismiss = { fullscreenImage = null }
-            )
+            // ── Полноэкранное изображение ────────────────────────────────────────
+            fullscreenImage?.let { file ->
+                FullscreenImageViewer(
+                    file = file,
+                    onDismiss = { fullscreenImage = null }
+                )
+            }
         }
     }
 
     // ── Диалог переименования ─────────────────────────────────────────────────
     if (showAliasDialog) {
+        val currentAlias by viewModel.currentAlias.collectAsState()
         AliasDialog(
             currentAlias = currentAlias,
             peerId = peerId,
@@ -363,7 +395,6 @@ private fun ChatTopBar(
             )
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Индикатор статуса
                 Box(
                     Modifier
                         .size(6.dp)
@@ -555,9 +586,7 @@ fun IncomingCallOverlay(
 
             Spacer(Modifier.height(32.dp))
 
-            // Аватар с пульсирующими кольцами
             Box(contentAlignment = Alignment.Center) {
-                // Кольцо 2
                 Box(
                     modifier = Modifier
                         .size(140.dp)
@@ -565,7 +594,6 @@ fun IncomingCallOverlay(
                         .alpha(ring2Alpha)
                         .background(PixelCallGreen.copy(alpha = 0.2f), CircleShape)
                 )
-                // Кольцо 1
                 Box(
                     modifier = Modifier
                         .size(110.dp)
@@ -573,7 +601,6 @@ fun IncomingCallOverlay(
                         .alpha(ring1Alpha)
                         .background(PixelCallGreen.copy(alpha = 0.3f), CircleShape)
                 )
-                // Аватар
                 Box(
                     modifier = Modifier
                         .size(80.dp)
@@ -615,11 +642,7 @@ fun IncomingCallOverlay(
 
             Spacer(Modifier.height(48.dp))
 
-            // Кнопки принять / отклонить
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(40.dp)
-            ) {
-                // Отклонить
+            Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
                         modifier = Modifier
@@ -645,7 +668,6 @@ fun IncomingCallOverlay(
                     )
                 }
 
-                // Принять
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
                         modifier = Modifier
@@ -738,7 +760,6 @@ fun OutgoingCallOverlay(
 
             Spacer(Modifier.height(12.dp))
 
-            // Анимированные точки "звоним..."
             Row(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -849,7 +870,6 @@ fun MessageBubble(
 private fun TextBubble(message: TextMessage, isOwn: Boolean) {
     val bubbleBg = if (isOwn) PixelBubbleOut else PixelBubbleIn
     val bubbleBorder = if (isOwn) PixelBubbleOutBorder else PixelBubbleInBorder
-    val textColor = if (isOwn) PixelText else PixelText
     val shape = RoundedCornerShape(
         topStart = if (isOwn) 16.dp else 4.dp,
         topEnd = if (isOwn) 4.dp else 16.dp,
@@ -869,7 +889,7 @@ private fun TextBubble(message: TextMessage, isOwn: Boolean) {
                 text = message.text,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
-                color = textColor,
+                color = PixelText,
                 lineHeight = 20.sp
             )
             Spacer(Modifier.height(4.dp))
@@ -908,8 +928,6 @@ private fun AudioBubble(
         bottomStart = 16.dp, bottomEnd = 16.dp
     )
 
-    // Анимация волн при воспроизведении — через animateFloatAsState,
-    // т.к. infiniteRepeatable нельзя использовать условно внутри InfiniteTransition
     val waveAnim by animateFloatAsState(
         targetValue = if (isPlaying) 1f else 0f,
         animationSpec = tween(durationMillis = if (isPlaying) 1000 else 300),
@@ -924,7 +942,6 @@ private fun AudioBubble(
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Play/Pause кнопка
             Box(
                 modifier = Modifier
                     .size(36.dp)
@@ -945,7 +962,6 @@ private fun AudioBubble(
             Spacer(Modifier.width(10.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                // Визуализация волны
                 Row(
                     modifier = Modifier.height(20.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1029,7 +1045,6 @@ private fun ImageBubble(
                     .heightIn(max = 200.dp)
                     .background(PixelMidGray)
             )
-            // Подпись
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1181,7 +1196,6 @@ private fun FullscreenImageViewer(file: File, onDismiss: () -> Unit) {
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
             )
-            // Закрыть
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -1210,7 +1224,6 @@ fun MessageInputBar(
     onRecordStart: () -> Unit,
     onRecordStop: () -> Unit
 ) {
-    // PTT анимация — пульс при записи через animateFloatAsState
     val recPulse by animateFloatAsState(
         targetValue = if (isRecording) 1.15f else 1f,
         animationSpec = if (isRecording)
@@ -1226,7 +1239,6 @@ fun MessageInputBar(
         label = "rec_glow"
     )
 
-    // Таймер записи
     var recordSeconds by remember { mutableStateOf(0) }
     LaunchedEffect(isRecording) {
         if (isRecording) {
@@ -1246,7 +1258,6 @@ fun MessageInputBar(
             .background(Color(0xFF0D0D16))
             .border(width = 1.dp, color = PixelBorder)
     ) {
-        // Панель записи (появляется при записи)
         AnimatedVisibility(visible = isRecording) {
             Row(
                 modifier = Modifier
@@ -1282,7 +1293,6 @@ fun MessageInputBar(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom
         ) {
-            // Кнопка прикрепить
             Box(
                 modifier = Modifier
                     .size(40.dp)
@@ -1301,7 +1311,6 @@ fun MessageInputBar(
 
             Spacer(Modifier.width(8.dp))
 
-            // Поле ввода
             TextField(
                 value = inputText,
                 onValueChange = onTextChange,
@@ -1332,9 +1341,7 @@ fun MessageInputBar(
 
             Spacer(Modifier.width(8.dp))
 
-            // Кнопка отправки или PTT
             if (inputText.isNotBlank()) {
-                // Отправить
                 Box(
                     modifier = Modifier
                         .size(40.dp)
@@ -1351,15 +1358,12 @@ fun MessageInputBar(
                     )
                 }
             } else {
-                // PTT — удерживать для записи
                 Box(
                     modifier = Modifier
                         .size(40.dp)
                         .scale(recPulse)
                         .clip(CircleShape)
-                        .background(
-                            if (isRecording) PixelWarn else PixelMidGray
-                        )
+                        .background(if (isRecording) PixelWarn else PixelMidGray)
                         .border(
                             width = if (isRecording) 2.dp else 1.dp,
                             color = if (isRecording) PixelWarn.copy(alpha = recGlow) else PixelBorder,
@@ -1371,7 +1375,7 @@ fun MessageInputBar(
                                     onRecordStart()
                                     val released = tryAwaitRelease()
                                     if (released) onRecordStop()
-                                    else onRecordStop() // отменено
+                                    else onRecordStop()
                                 }
                             )
                         },

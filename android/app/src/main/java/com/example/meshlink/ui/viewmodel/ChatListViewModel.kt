@@ -23,7 +23,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing
 
-    /** Диалог подтверждения удаления: peerId или null */
+
     private val _deleteConfirmPeerId = MutableStateFlow<String?>(null)
     val deleteConfirmPeerId: StateFlow<String?> = _deleteConfirmPeerId
 
@@ -53,7 +53,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** Pull-to-refresh — принудительный rediscover */
+
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
@@ -64,21 +64,21 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** Запросить удаление чата — показывает диалог подтверждения */
+
     fun requestDeleteChat(peerId: String) {
         _deleteConfirmPeerId.value = peerId
     }
 
-    /** Отмена удаления */
+
     fun cancelDeleteChat() {
         _deleteConfirmPeerId.value = null
     }
 
-    /** Подтвердить удаление чата — удаляет сообщения, аккаунт и профиль */
+
     fun confirmDeleteChat(peerId: String) {
         viewModelScope.launch {
             container.chatRepository.deleteAllMessagesByPeerId(peerId)
-            // Убираем пира из реестра (опционально, чтобы пропал из NEARBY тоже)
+
             container.networkManager.removePeerFromRegistry(peerId)
             _deleteConfirmPeerId.value = null
         }

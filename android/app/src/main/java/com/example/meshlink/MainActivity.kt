@@ -17,6 +17,7 @@ import androidx.core.view.WindowCompat
 import com.example.meshlink.network.wifidirect.WiFiDirectService
 import com.example.meshlink.ui.MeshLinkApp
 import com.example.meshlink.ui.theme.MeshLinkTheme
+import com.example.meshlink.util.NotificationHelper
 
 class MainActivity : ComponentActivity() {
 
@@ -58,6 +59,8 @@ class MainActivity : ComponentActivity() {
         app.initializeContainer(this)
         app.notifyServiceContainerReady()
 
+        NotificationHelper.createChannels(this)
+
         checkServices()
         requestPermissions()
 
@@ -71,25 +74,28 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume")
+
+        AppForegroundTracker.setForeground(true)
     }
 
     override fun onPause() {
         super.onPause()
         Log.d(TAG, "onPause — service keeps running in background")
+
+        AppForegroundTracker.setForeground(false)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "onDestroy — service continues independently")
+        AppForegroundTracker.setForeground(false)
     }
 
     private fun requestPermissions() {
         val needed = buildList {
-            // WiFi / Location
             add(Manifest.permission.ACCESS_FINE_LOCATION)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
 
-            // Android 13+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
                 add(Manifest.permission.POST_NOTIFICATIONS)
@@ -100,10 +106,8 @@ class MainActivity : ComponentActivity() {
                 add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
 
-            // Аудио
             add(Manifest.permission.RECORD_AUDIO)
 
-            // Bluetooth
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(Manifest.permission.BLUETOOTH_CONNECT)
                 add(Manifest.permission.BLUETOOTH_SCAN)

@@ -13,6 +13,6 @@ interface ChatRepository {
     suspend fun getMessageByMessageId(messageId: Long): Message?
     suspend fun getAllMessagesByReceiverPeerId(peerId: String): List<Message>
 
-    /** Удалить все сообщения с конкретным пиром */
+
     suspend fun deleteAllMessagesByPeerId(peerId: String)
 }

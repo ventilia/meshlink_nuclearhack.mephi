@@ -8,10 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
-/**
- * AudioPlaybackManager — воспроизведение голосовых сообщений.
- * Отслеживает текущий воспроизводимый файл для переключения Play/Pause в UI.
- */
+
 class AudioPlaybackManager(private val app: Application) {
 
     companion object {
@@ -20,18 +17,15 @@ class AudioPlaybackManager(private val app: Application) {
 
     private var player: MediaPlayer? = null
 
-    /** Имя файла, который сейчас играет. null = ничего не играет */
     private val _playingFile = MutableStateFlow<String?>(null)
     val playingFile: StateFlow<String?> = _playingFile
 
-    /** true если сейчас играет что-то */
     val isPlaying: StateFlow<Boolean> get() = _isPlaying
     private val _isPlaying = MutableStateFlow(false)
 
     fun play(file: File) {
         val fileName = file.name
 
-        // Если нажали на тот же файл — toggle pause/resume
         if (_playingFile.value == fileName) {
             val currentPlayer = player
             if (currentPlayer != null && currentPlayer.isPlaying) {
@@ -47,7 +41,7 @@ class AudioPlaybackManager(private val app: Application) {
             }
         }
 
-        // Остановить предыдущее
+
         stopInternal()
 
         if (!file.exists()) {

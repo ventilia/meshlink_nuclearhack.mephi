@@ -16,17 +16,6 @@ import java.io.DataOutputStream
 import java.io.IOException
 import java.util.UUID
 
-/**
- * Bluetooth RFCOMM транспорт — fallback когда WiFi Direct недоступен.
- *
- * Архитектура (как Briar BluetoothPlugin):
- * - Один RFCOMM сервер на одном UUID
- * - Клиент подключается к известному MAC + UUID
- * - Мультиплексированный канал для всех типов пакетов
- *
- * ВАЖНО: BluetoothSocket НЕ имеет soTimeout в отличие от обычного Socket.
- * Для таймаута используем withTimeout у корутин.
- */
 class BluetoothTransport(
     private val context: Context,
     private val onPacketReceived: (type: Int, payload: ByteArray, senderAddress: String) -> Unit
@@ -44,7 +33,7 @@ class BluetoothTransport(
     private var serverSocket: BluetoothServerSocket? = null
     @Volatile private var isRunning = false
 
-    // Активные соединения: BT address → socket
+
     private val connections = mutableMapOf<String, BluetoothSocket>()
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
@@ -76,7 +65,7 @@ class BluetoothTransport(
         }
     }
 
-    // ── Сервер ─────────────────────────────────────────────────────
+
 
     fun startServer() {
         if (!isAvailable()) {
@@ -125,7 +114,7 @@ class BluetoothTransport(
         val address = socket.remoteDevice.address
         try {
             socket.use {
-                // BluetoothSocket НЕ имеет soTimeout — таймаут управляем через корутины
+
                 connections[address] = socket
                 val dis = DataInputStream(socket.inputStream)
 
@@ -148,7 +137,7 @@ class BluetoothTransport(
         }
     }
 
-    // ── Клиент ─────────────────────────────────────────────────────
+
 
     suspend fun sendPacket(btAddress: String, type: Int, payload: ByteArray): Boolean {
         if (!isAvailable()) return false
@@ -199,9 +188,9 @@ class BluetoothTransport(
         }
     }
 
-    // ── Discovery ──────────────────────────────────────────────────
 
-    fun getKnownMeshDevices(): List<Pair<String, String>> { // (address, name)
+
+    fun getKnownMeshDevices(): List<Pair<String, String>> {
         if (!isAvailable()) return emptyList()
         return try {
             bluetoothAdapter?.bondedDevices?.map {

@@ -85,7 +85,7 @@ data class NetworkMessageAck(
     val receiverId: String
 )
 
-// ─── Calls ────────────────────────────────────────────────────────────────────
+
 @Serializable
 data class NetworkCallRequest(
     val senderId: String,

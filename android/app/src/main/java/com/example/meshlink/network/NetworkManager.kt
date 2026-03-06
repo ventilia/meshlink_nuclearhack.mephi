@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import com.example.meshlink.AppForegroundTracker
 import com.example.meshlink.core.NativeCore
 import com.example.meshlink.data.local.FileManager
 import com.example.meshlink.domain.model.*
@@ -25,6 +26,7 @@ import com.example.meshlink.network.protocol.json
 import com.example.meshlink.network.transport.MeshClient
 import com.example.meshlink.network.transport.MeshServer
 import com.example.meshlink.network.wifidirect.WiFiDirectBroadcastReceiver
+import com.example.meshlink.util.NotificationHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.decodeFromString
@@ -73,6 +75,7 @@ class NetworkManager(
 
     private val server = MeshServer(TCP_PORT)
     private val client = MeshClient(TCP_PORT)
+
     private val bluetoothTransport = BluetoothTransport(context) { type, payload, sender ->
         dispatchIncomingPacket(type, payload, sender)
     }
@@ -83,7 +86,8 @@ class NetworkManager(
 
     val connectedDevices: StateFlow<Map<String, NetworkDevice>> = peerRegistry.peers
 
-    private val profileCache = mutableSetOf<String>()
+
+    private val profileCache = mutableMapOf<String, Long>() // peerId → updateTimestamp
     private val profileRequestInFlight = mutableSetOf<String>()
     private val profileLock = Any()
 
@@ -206,7 +210,7 @@ class NetworkManager(
 
         val identityFile = File(filesDir, "meshlink_identity.bin")
         if (identityFile.exists()) {
-            Log.w(TAG, "Resetting old identity (may have duplicate peerId) — will regenerate with unique seed")
+            Log.w(TAG, "Resetting old identity — will regenerate with unique seed")
             identityFile.delete()
         }
         prefs.edit().putBoolean(migrationKey, true).apply()
@@ -256,7 +260,6 @@ class NetworkManager(
     }
 
 
-
     private fun setupServerHandlers() {
         server.onKeepalive = { keepalive, senderIp ->
             scope.launch {
@@ -276,9 +279,25 @@ class NetworkManager(
         server.onAudioMessage = { msg -> handleAudioMessage(msg) }
         server.onAckReceived = { ack -> handleAckReceived(ack) }
         server.onAckRead = { ack -> handleAckRead(ack) }
-        server.onCallRequest = { req -> _callRequest.value = req }
+
+
+        server.onCallRequest = { req ->
+            _callRequest.value = req
+            if (!AppForegroundTracker.isInForeground()) {
+                scope.launch {
+                    val contact = contactRepository.getAllContactsAsFlow().first()
+                        .find { it.peerId == req.senderId }
+                    val callerName = contact?.username
+                        ?: req.senderId.take(8).uppercase()
+                    NotificationHelper.showCallNotification(context, callerName, req.senderId)
+                }
+            }
+        }
         server.onCallResponse = { res -> _callResponse.value = res }
-        server.onCallEnd = { end -> _callEnd.value = end }
+        server.onCallEnd = { end ->
+            _callEnd.value = end
+            NotificationHelper.dismissCallNotification(context)
+        }
         server.onCallAudio = { bytes, _ -> _callFragment.value = bytes }
     }
 
@@ -302,7 +321,6 @@ class NetworkManager(
             Log.w(TAG, "BT dispatch error type=$type: ${e.message}")
         }
     }
-
 
 
     private fun getCurrentOwnIp(): String? {
@@ -347,17 +365,9 @@ class NetworkManager(
 
             udpDiscovery.peers.collect { udpPeers ->
                 val myId = ownPeerId
-                Log.d(TAG, "[UDP] map size=${udpPeers.size} ownPeerId=${myId.take(8)}")
                 for ((peerId, discovered) in udpPeers) {
-                    if (myId.isNotBlank() && peerId == myId) {
-                        Log.v(TAG, "[UDP] skip self ${peerId.take(8)}")
-                        continue
-                    }
+                    if (myId.isNotBlank() && peerId == myId) continue
                     if (peerId.isBlank()) continue
-                    Log.i(
-                        TAG,
-                        "[UDP] → registry: '${discovered.announce.username}' sc='${discovered.announce.shortCode}' @ ${discovered.ip}"
-                    )
                     val device = NetworkDevice(
                         peerId = peerId,
                         username = discovered.announce.username,
@@ -371,7 +381,6 @@ class NetworkManager(
                     saveKnownIp(discovered.ip)
                     scope.launch { requestProfileIfNeeded(peerId, discovered.ip) }
                 }
-                Log.d(TAG, "[UDP] registry size=${peerRegistry.peers.value.size}")
             }
         }
     }
@@ -399,8 +408,6 @@ class NetworkManager(
                 if (!isOwner && ownerIp != null && ownerIp != ownIpAddress) {
                     Log.i(TAG, "[P2P] Connected to GO @ $ownerIp — sending direct announce (x3)")
                     saveKnownIp(ownerIp)
-
-
                     udpDiscovery.sendDirectAnnounce(ownerIp)
                     scope.launch {
                         delay(1_000)
@@ -439,7 +446,6 @@ class NetworkManager(
             for (ip in allIps) udpDiscovery.sendDirectAnnounce(ip)
         }
     }
-
 
 
     private fun startKeepaliveLoop() {
@@ -486,30 +492,21 @@ class NetworkManager(
                 routingTableJson = routingTableJson
             )
 
-
             val targets = buildSet<String> {
-
                 if (!receiver.isGroupOwner.value) {
                     add(WiFiDirectBroadcastReceiver.GROUP_OWNER_IP)
                 }
-
                 receiver.groupOwnerAddress.value?.let { if (it != currentIp) add(it) }
-
                 knownPeers.mapNotNull { it.ipAddress }.forEach { add(it) }
             }.filter { it != currentIp && it.isNotBlank() }
 
             for (ip in targets) {
-                Log.d(TAG, "[KA] → $ip (${knownPeers.size} peers in registry)")
                 val localIp = client.sendKeepaliveReturnLocalIp(ip, keepalive)
                 if (localIp != null && localIp != currentIp && localIp != "0.0.0.0") {
-                    Log.i(TAG, "[KA] Own IP discovered via TCP connect: $localIp")
                     ownIpAddress = localIp
                     udpDiscovery.updateOwnIp(localIp)
                 }
                 saveKnownIp(ip)
-            }
-            if (targets.isEmpty()) {
-                Log.v(TAG, "[KA] no targets — registry=${peerRegistry.peers.value.size} peers")
             }
         } catch (e: Exception) {
             Log.w(TAG, "sendKeepalive error: ${e.message}")
@@ -520,7 +517,6 @@ class NetworkManager(
     private fun handleKeepalive(keepalive: NetworkKeepalive, senderIp: String) {
         val now = System.currentTimeMillis()
         val ownIps = getAllOwnIps()
-
 
         val fromPeerId: String = keepalive.senderPeerId?.takeIf { it.isNotBlank() }
             ?: keepalive.devices.firstOrNull { d ->
@@ -571,8 +567,7 @@ class NetworkManager(
                     }
                 }
             val peersJson = org.json.JSONArray(peers).toString()
-            val routeCount = NativeCore.updateRoutingTable(fromPeerId, senderIp, peersJson)
-            Log.v(TAG, "Routing table: $routeCount routes after keepalive from ${fromPeerId.take(8)}")
+            NativeCore.updateRoutingTable(fromPeerId, senderIp, peersJson)
         }
 
         keepalive.routingTableJson?.let { rtJson ->
@@ -600,7 +595,6 @@ class NetworkManager(
                                 hopCount = hops + 1, viaPeerId = viaPeerId
                             ), "mesh-rt"
                         )
-                        Log.i(TAG, "[MESH] Discovered ${peerId.take(8)} via ${viaPeerId.take(8)} (hops=${hops + 1})")
                     }
                 }
             }
@@ -611,7 +605,6 @@ class NetworkManager(
 
     private fun handleProfileRequest(req: NetworkProfileRequest, senderIp: String) {
         if (req.senderId.isBlank()) return
-        Log.d(TAG, "[PROFILE] Request from ${req.senderId.take(8)} @ $senderIp")
         val existing = peerRegistry.peers.value[req.senderId]
         if (existing == null) {
             peerRegistry.upsert(
@@ -631,16 +624,18 @@ class NetworkManager(
             val imageFileName = res.imageBase64?.let {
                 fileManager.saveNetworkProfileImage(res.senderId, it)
             }
+            val newTimestamp = System.currentTimeMillis()
             contactRepository.addOrUpdateProfile(
                 Profile(
                     peerId = res.senderId,
-                    updateTimestamp = System.currentTimeMillis(),
+                    updateTimestamp = newTimestamp,
                     username = res.username,
                     imageFileName = imageFileName
                 )
             )
+
             synchronized(profileLock) {
-                profileCache.add(res.senderId)
+                profileCache[res.senderId] = newTimestamp
                 profileRequestInFlight.remove(res.senderId)
             }
         }
@@ -668,6 +663,20 @@ class NetworkManager(
             )
             contactRepository.addOrUpdateAccount(Account(msg.senderId, System.currentTimeMillis()))
             sendAckReceived(msg.senderId, msg.messageId)
+
+
+            if (!AppForegroundTracker.isInForeground()) {
+                val contact = contactRepository.getAllContactsAsFlow().first()
+                    .find { it.peerId == msg.senderId }
+                val senderName = contact?.username
+                    ?: msg.senderId.take(8).uppercase()
+                NotificationHelper.showMessageNotification(
+                    context = context,
+                    senderName = senderName,
+                    text = msg.text,
+                    peerId = msg.senderId
+                )
+            }
         }
     }
 
@@ -694,6 +703,18 @@ class NetworkManager(
             )
             contactRepository.addOrUpdateAccount(Account(msg.senderId, System.currentTimeMillis()))
             sendAckReceived(msg.senderId, msg.messageId)
+
+            if (!AppForegroundTracker.isInForeground()) {
+                val contact = contactRepository.getAllContactsAsFlow().first()
+                    .find { it.peerId == msg.senderId }
+                val senderName = contact?.username ?: msg.senderId.take(8).uppercase()
+                NotificationHelper.showMessageNotification(
+                    context = context,
+                    senderName = senderName,
+                    text = "[файл] ${msg.fileName}",
+                    peerId = msg.senderId
+                )
+            }
         }
     }
 
@@ -724,6 +745,18 @@ class NetworkManager(
             )
             contactRepository.addOrUpdateAccount(Account(msg.senderId, System.currentTimeMillis()))
             sendAckReceived(msg.senderId, msg.messageId)
+
+            if (!AppForegroundTracker.isInForeground()) {
+                val contact = contactRepository.getAllContactsAsFlow().first()
+                    .find { it.peerId == msg.senderId }
+                val senderName = contact?.username ?: msg.senderId.take(8).uppercase()
+                NotificationHelper.showMessageNotification(
+                    context = context,
+                    senderName = senderName,
+                    text = "🎵 голосовое сообщение",
+                    peerId = msg.senderId
+                )
+            }
         }
     }
 
@@ -747,7 +780,6 @@ class NetworkManager(
         if (NativeCore.isInitialized()) {
             val nextHopIp = NativeCore.getNextHopIp(peerId)
             if (nextHopIp.isNotBlank()) {
-                Log.d(TAG, "Mesh route to ${peerId.take(8)}: next hop $nextHopIp")
                 return Pair(nextHopIp, null)
             }
         }
@@ -755,7 +787,6 @@ class NetworkManager(
         if (device?.viaPeerId != null) {
             val viaIp = peerRegistry.getIp(device.viaPeerId)
             if (viaIp != null) {
-                Log.d(TAG, "Mesh route to ${peerId.take(8)} via ${device.viaPeerId.take(8)}")
                 return Pair(viaIp, null)
             }
         }
@@ -801,13 +832,9 @@ class NetworkManager(
             var msg = TextMessage(0, ownPeerId, peerId, ts, MessageState.MESSAGE_SENT, text)
             val id = chatRepository.addMessage(msg)
             msg = msg.copy(messageId = id)
-            Log.i(TAG, "[MSG] → '${text.take(40)}' to ${peerId.take(8)}")
             val netMsg = NetworkTextMessage(msg.messageId, ownPeerId, peerId, ts, text, ttl = 5)
             val payload = json.encodeToString(NetworkTextMessage.serializer(), netMsg).encodeToByteArray()
-            val sent = sendPacket(peerId, PacketType.TEXT_MESSAGE, payload, "sendText")
-            if (!sent) {
-                Log.w(TAG, "[MSG] → no route to ${peerId.take(8)}, message saved locally")
-            }
+            sendPacket(peerId, PacketType.TEXT_MESSAGE, payload, "sendText")
         }
     }
 
@@ -851,18 +878,61 @@ class NetworkManager(
     }
 
     fun sendCallRequest(peerId: String) {
-        val ip = peerRegistry.getIp(peerId) ?: return
-        scope.launch { client.sendCallRequest(ip, NetworkCallRequest(ownPeerId, peerId)) }
+        val ip = peerRegistry.getIp(peerId) ?: run {
+            Log.w("NetworkManager", "sendCallRequest: no IP for ${peerId.take(8)}")
+            return
+        }
+        scope.launch {
+            // 3 попытки — TCP может не пройти с первой в нестабильной mesh-сети
+            repeat(3) { attempt ->
+                try {
+                    client.sendCallRequest(ip, NetworkCallRequest(ownPeerId, peerId))
+                    Log.d("NetworkManager", "sendCallRequest OK (attempt ${attempt + 1}) → $ip")
+                    return@launch
+                } catch (e: Exception) {
+                    Log.w("NetworkManager", "sendCallRequest attempt ${attempt + 1} failed: ${e.message}")
+                    if (attempt < 2) delay(500)
+                }
+            }
+            Log.e("NetworkManager", "sendCallRequest FAILED after 3 attempts → $ip")
+        }
     }
 
     fun sendCallResponse(peerId: String, accepted: Boolean) {
-        val ip = peerRegistry.getIp(peerId) ?: return
-        scope.launch { client.sendCallResponse(ip, NetworkCallResponse(ownPeerId, peerId, accepted)) }
+        val ip = peerRegistry.getIp(peerId) ?: run {
+            Log.w("NetworkManager", "sendCallResponse: no IP for ${peerId.take(8)}")
+            return
+        }
+        scope.launch {
+            repeat(3) { attempt ->
+                try {
+                    client.sendCallResponse(ip, NetworkCallResponse(ownPeerId, peerId, accepted))
+                    Log.d("NetworkManager", "sendCallResponse accepted=$accepted OK (attempt ${attempt + 1}) → $ip")
+                    return@launch
+                } catch (e: Exception) {
+                    Log.w("NetworkManager", "sendCallResponse attempt ${attempt + 1} failed: ${e.message}")
+                    if (attempt < 2) delay(500)
+                }
+            }
+        }
     }
 
     fun sendCallEnd(peerId: String) {
-        val ip = peerRegistry.getIp(peerId) ?: return
-        scope.launch { client.sendCallEnd(ip, NetworkCallEnd(ownPeerId, peerId)) }
+        val ip = peerRegistry.getIp(peerId) ?: run {
+            Log.w("NetworkManager", "sendCallEnd: no IP for ${peerId.take(8)}")
+            return
+        }
+        scope.launch {
+            repeat(2) { attempt ->
+                try {
+                    client.sendCallEnd(ip, NetworkCallEnd(ownPeerId, peerId))
+                    return@launch
+                } catch (e: Exception) {
+                    Log.w("NetworkManager", "sendCallEnd attempt ${attempt + 1} failed: ${e.message}")
+                    if (attempt < 1) delay(300)
+                }
+            }
+        }
     }
 
     fun sendCallFragment(peerId: String, audioBytes: ByteArray) {
@@ -875,18 +945,34 @@ class NetworkManager(
         _callResponse.value = null
         _callEnd.value = null
         _callFragment.value = null
+
+        NotificationHelper.dismissCallNotification(context)
     }
 
 
     private suspend fun requestProfileIfNeeded(peerId: String, ip: String) {
         if (peerId == ownPeerId || peerId.isBlank()) return
 
+
+        val contact = try {
+            contactRepository.getAllContactsAsFlow().first().find { it.peerId == peerId }
+        } catch (e: Exception) {
+            null
+        }
+        val localTimestamp = contact?.account?.profileUpdateTimestamp ?: 0L
+
         val shouldRequest = synchronized(profileLock) {
-            if (peerId in profileCache || peerId in profileRequestInFlight) {
+            if (peerId in profileRequestInFlight) {
                 false
             } else {
-                profileRequestInFlight.add(peerId)
-                true
+                val cachedTimestamp = profileCache[peerId] ?: -1L
+
+                if (cachedTimestamp < 0L || localTimestamp > cachedTimestamp) {
+                    profileRequestInFlight.add(peerId)
+                    true
+                } else {
+                    false
+                }
             }
         }
         if (!shouldRequest) return
@@ -895,7 +981,6 @@ class NetworkManager(
         Log.d(TAG, "[PROFILE] Requesting from ${peerId.take(8)} @ $ip")
         try {
             client.sendProfileRequest(ip, NetworkProfileRequest(ownPeerId, peerId))
-            Log.d(TAG, "[PROFILE] Request sent → ${peerId.take(8)} @ $ip")
         } catch (e: Exception) {
             Log.w(TAG, "[PROFILE] Request failed to ${peerId.take(8)}: ${e.message}")
             synchronized(profileLock) { profileRequestInFlight.remove(peerId) }
@@ -968,12 +1053,16 @@ class NetworkManager(
     }
 
 
+
     private fun warmupProfileCache() {
         scope.launch {
             try {
                 contactRepository.getAllContactsAsFlow().first().forEach { contact ->
                     if (contact.profile != null) {
-                        synchronized(profileLock) { profileCache.add(contact.peerId) }
+                        synchronized(profileLock) {
+
+                            profileCache[contact.peerId] = contact.profile.updateTimestamp
+                        }
                     }
                 }
                 Log.d(TAG, "Profile cache warmed: ${profileCache.size} entries")
@@ -982,7 +1071,7 @@ class NetworkManager(
         }
     }
 
-
+    fun getIpForPeer(peerId: String): String? = peerRegistry.getIp(peerId)
     fun removePeerFromRegistry(peerId: String) {
         peerRegistry.remove(peerId)
         if (NativeCore.isInitialized()) NativeCore.removeRoute(peerId)

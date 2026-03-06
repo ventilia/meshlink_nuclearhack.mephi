@@ -19,10 +19,7 @@ class MeshClient(private val port: Int = 8800) {
         private const val CONNECT_TIMEOUT_MS = 3_000
     }
 
-    /**
-     * Отправить keepalive и вернуть собственный IP (socket.localAddress).
-     * Возвращает null если соединение не удалось.
-     */
+
     suspend fun sendKeepaliveReturnLocalIp(ip: String, data: NetworkKeepalive): String? {
         return withContext(Dispatchers.IO) {
             try {

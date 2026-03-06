@@ -541,4 +541,259 @@ object MeshIcons {
             moveTo(3f, 19f); lineTo(21f, 19f)
         }
     }.build()
+
+    // ── Микрофон выключен (перечёркнутый) ────────────────────────────────────
+    val MicOff: ImageVector get() = ImageVector.Builder(
+        name = "MicOff",
+        defaultWidth = 24.dp, defaultHeight = 24.dp,
+        viewportWidth = 24f, viewportHeight = 24f
+    ).apply {
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            // Капсула микрофона (неполная — перечёркнута)
+            moveTo(9f, 9f)
+            lineTo(9f, 12f)
+            curveTo(9f, 13.66f, 10.34f, 15f, 12f, 15f)
+            curveTo(12.77f, 15f, 13.47f, 14.71f, 14f, 14.24f)
+            moveTo(12f, 2f)
+            curveTo(10.34f, 2f, 9f, 3.34f, 9f, 5f)
+            lineTo(9f, 7f)
+            moveTo(15f, 7f)
+            lineTo(15f, 12f)
+            curveTo(15f, 12.56f, 14.87f, 13.08f, 14.65f, 13.55f)
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            // Дуга усилителя (неполная)
+            moveTo(19f, 10f)
+            curveTo(19f, 12.76f, 17.6f, 15.2f, 15.43f, 16.67f)
+            moveTo(5f, 10f)
+            curveTo(5f, 11.27f, 5.32f, 12.46f, 5.88f, 13.5f)
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round
+        ) {
+            // Ножка и линия мьюта
+            moveTo(12f, 18f)
+            lineTo(12f, 22f)
+            moveTo(9f, 22f)
+            lineTo(15f, 22f)
+            // Перечёркивающая линия
+            moveTo(2f, 2f)
+            lineTo(22f, 22f)
+        }
+    }.build()
+
+    // ── Динамик (громко) ─────────────────────────────────────────────────────
+    val SpeakerOn: ImageVector get() = ImageVector.Builder(
+        name = "SpeakerOn",
+        defaultWidth = 24.dp, defaultHeight = 24.dp,
+        viewportWidth = 24f, viewportHeight = 24f
+    ).apply {
+        path(
+            fill = SolidColor(Color.White)
+        ) {
+            // Корпус динамика
+            moveTo(11f, 5f)
+            lineTo(6f, 9f)
+            lineTo(2f, 9f)
+            lineTo(2f, 15f)
+            lineTo(6f, 15f)
+            lineTo(11f, 19f)
+            close()
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round
+        ) {
+            // Малая волна
+            moveTo(15.54f, 8.46f)
+            curveTo(16.92f, 9.84f, 17.74f, 11.78f, 17.74f, 12f)
+            curveTo(17.74f, 12.22f, 16.92f, 14.16f, 15.54f, 15.54f)
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round
+        ) {
+            // Большая волна
+            moveTo(18.36f, 5.64f)
+            curveTo(20.73f, 8.01f, 22f, 11f, 22f, 12f)
+            curveTo(22f, 13f, 20.73f, 15.99f, 18.36f, 18.36f)
+        }
+    }.build()
+
+    // ── Динамик (тихо / ухо) ─────────────────────────────────────────────────
+    val SpeakerOff: ImageVector get() = ImageVector.Builder(
+        name = "SpeakerOff",
+        defaultWidth = 24.dp, defaultHeight = 24.dp,
+        viewportWidth = 24f, viewportHeight = 24f
+    ).apply {
+        path(
+            fill = SolidColor(Color.White)
+        ) {
+            // Корпус динамика
+            moveTo(11f, 5f)
+            lineTo(6f, 9f)
+            lineTo(2f, 9f)
+            lineTo(2f, 15f)
+            lineTo(6f, 15f)
+            lineTo(11f, 19f)
+            close()
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round
+        ) {
+            // Перечёркивающая линия
+            moveTo(23f, 9f)
+            lineTo(17f, 15f)
+            moveTo(17f, 9f)
+            lineTo(23f, 15f)
+        }
+    }.build()
+
+    // ── Видеокамера включена ──────────────────────────────────────────────────
+    val VideoOn: ImageVector get() = ImageVector.Builder(
+        name = "VideoOn",
+        defaultWidth = 24.dp, defaultHeight = 24.dp,
+        viewportWidth = 24f, viewportHeight = 24f
+    ).apply {
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            // Корпус камеры
+            moveTo(15f, 10f)
+            lineTo(21f, 7f)
+            lineTo(21f, 17f)
+            lineTo(15f, 14f)
+            close()
+            // Экран камеры
+            moveTo(3f, 8f)
+            curveTo(3f, 6.9f, 3.9f, 6f, 5f, 6f)
+            lineTo(14f, 6f)
+            curveTo(15.1f, 6f, 16f, 6.9f, 16f, 8f)
+            lineTo(16f, 16f)
+            curveTo(16f, 17.1f, 15.1f, 18f, 14f, 18f)
+            lineTo(5f, 18f)
+            curveTo(3.9f, 18f, 3f, 17.1f, 3f, 16f)
+            close()
+        }
+    }.build()
+
+    // ── Видеокамера выключена ─────────────────────────────────────────────────
+    val VideoOff: ImageVector get() = ImageVector.Builder(
+        name = "VideoOff",
+        defaultWidth = 24.dp, defaultHeight = 24.dp,
+        viewportWidth = 24f, viewportHeight = 24f
+    ).apply {
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            // Камера (упрощённый контур)
+            moveTo(15f, 10f)
+            lineTo(21f, 7f)
+            lineTo(21f, 17f)
+            moveTo(3.59f, 3.59f)
+            lineTo(3f, 4.17f)
+            lineTo(3f, 16f)
+            curveTo(3f, 17.1f, 3.9f, 18f, 5f, 18f)
+            lineTo(16f, 18f)
+            lineTo(3.59f, 3.59f)
+            moveTo(16f, 8.12f)
+            lineTo(16f, 8f)
+            curveTo(16f, 6.9f, 15.1f, 6f, 14f, 6f)
+            lineTo(7.12f, 6f)
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round
+        ) {
+            // Перечёркивающая линия
+            moveTo(1f, 1f)
+            lineTo(23f, 23f)
+        }
+    }.build()
+
+    // ── Перевернуть камеру ────────────────────────────────────────────────────
+    val FlipCamera: ImageVector get() = ImageVector.Builder(
+        name = "FlipCamera",
+        defaultWidth = 24.dp, defaultHeight = 24.dp,
+        viewportWidth = 24f, viewportHeight = 24f
+    ).apply {
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            // Корпус камеры
+            moveTo(20f, 7f)
+            lineTo(4f, 7f)
+            curveTo(2.9f, 7f, 2f, 7.9f, 2f, 9f)
+            lineTo(2f, 18f)
+            curveTo(2f, 19.1f, 2.9f, 20f, 4f, 20f)
+            lineTo(20f, 20f)
+            curveTo(21.1f, 20f, 22f, 19.1f, 22f, 18f)
+            lineTo(22f, 9f)
+            curveTo(22f, 7.9f, 21.1f, 7f, 20f, 7f)
+            close()
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            // Линза
+            moveTo(12f, 17f)
+            curveTo(13.66f, 17f, 15f, 15.66f, 15f, 14f)
+            curveTo(15f, 12.34f, 13.66f, 11f, 12f, 11f)
+            curveTo(10.34f, 11f, 9f, 12.34f, 9f, 14f)
+            curveTo(9f, 15.66f, 10.34f, 17f, 12f, 17f)
+            close()
+        }
+        path(
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round
+        ) {
+            // Стрелки переключения (вверху)
+            moveTo(8f, 4f)
+            lineTo(12f, 7f)
+            lineTo(16f, 4f)
+        }
+    }.build()
 }

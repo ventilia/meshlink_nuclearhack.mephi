@@ -16,7 +16,7 @@ object PacketType {
     const val CALL_REQUEST       = 9
     const val CALL_RESPONSE      = 10
     const val CALL_END           = 11
-    const val CALL_AUDIO         = 12  // binary, not JSON
+    const val CALL_AUDIO         = 12
 }
 
 val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

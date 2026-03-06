@@ -1,5 +1,6 @@
 package com.example.meshlink.util
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -11,35 +12,19 @@ import androidx.core.app.NotificationManagerCompat
 import com.example.meshlink.MainActivity
 import com.example.meshlink.R
 
-/**
- * NotificationHelper — централизованное управление уведомлениями MeshLink.
- *
- * Два канала:
- *  - CHANNEL_MESSAGES: новые сообщения (приоритет HIGH, звук)
- *  - CHANNEL_CALLS: входящие звонки (приоритет MAX, полноэкранное Intent)
- *
- * Использование:
- *  1. Вызвать createChannels() один раз при старте приложения (в MainActivity.onCreate).
- *  2. Вызвать showMessageNotification() / showCallNotification() из NetworkManager
- *     когда приложение находится в фоне.
- */
+
 object NotificationHelper {
 
     const val CHANNEL_MESSAGES = "meshlink_messages"
     const val CHANNEL_CALLS    = "meshlink_calls"
 
-    // ID уведомления о входящем звонке (фиксированный — чтобы можно было отменить)
     private const val CALL_NOTIFICATION_ID = 9001
 
-    /**
-     * Создать каналы уведомлений (требуется Android 8+).
-     * Безопасно вызывать несколько раз — повторное создание игнорируется.
-     */
+
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(NotificationManager::class.java)
 
-            // Канал сообщений
             val messagesChannel = NotificationChannel(
                 CHANNEL_MESSAGES,
                 "Сообщения",
@@ -50,7 +35,6 @@ object NotificationHelper {
                 enableVibration(true)
             }
 
-            // Канал звонков
             val callsChannel = NotificationChannel(
                 CHANNEL_CALLS,
                 "Звонки",
@@ -66,23 +50,17 @@ object NotificationHelper {
         }
     }
 
-    /**
-     * Показать уведомление о новом сообщении.
-     *
-     * @param context контекст
-     * @param senderName имя отправителя (псевдоним или username)
-     * @param text текст сообщения (будет обрезан если слишком длинный)
-     * @param peerId peerId отправителя — используется для открытия нужного чата
-     */
+
+    @SuppressLint("MissingPermission")
     fun showMessageNotification(
         context: Context,
         senderName: String,
         text: String,
         peerId: String
     ) {
+
         if (!hasNotificationPermission(context)) return
 
-        // Intent для открытия чата при нажатии на уведомление
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("peerId", peerId)
@@ -97,20 +75,21 @@ object NotificationHelper {
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setContentTitle(senderName)
             .setContentText(text.take(100))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text.take(300)))
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+
+            .setGroup("meshlink_messages_$peerId")
             .build()
 
-        // Используем hashCode от peerId чтобы группировать уведомления по собеседнику
+
         NotificationManagerCompat.from(context).notify(peerId.hashCode(), notification)
     }
 
-    /**
-     * Показать уведомление о входящем звонке.
-     * Включает кнопки "Принять" и "Отклонить" прямо в шторке.
-     */
+
+    @SuppressLint("MissingPermission")
     fun showCallNotification(
         context: Context,
         callerName: String,
@@ -118,7 +97,6 @@ object NotificationHelper {
     ) {
         if (!hasNotificationPermission(context)) return
 
-        // Открыть чат при нажатии на уведомление
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("peerId", peerId)
@@ -137,27 +115,23 @@ object NotificationHelper {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(openPendingIntent)
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            // Показать уведомление поверх других (heads-up)
+
             .setFullScreenIntent(openPendingIntent, true)
-            .setOngoing(true) // Не смахивается пока звонок активен
+
+            .setOngoing(true)
             .build()
 
         NotificationManagerCompat.from(context).notify(CALL_NOTIFICATION_ID, notification)
     }
 
-    /**
-     * Скрыть уведомление о звонке (вызывать когда звонок принят/отклонён/истёк).
-     */
+
     fun dismissCallNotification(context: Context) {
         NotificationManagerCompat.from(context).cancel(CALL_NOTIFICATION_ID)
     }
 
-    /**
-     * Проверить разрешение POST_NOTIFICATIONS (Android 13+).
-     * На более старых версиях всегда возвращает true.
-     */
+
     fun hasNotificationPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==

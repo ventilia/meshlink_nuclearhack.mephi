@@ -6,4 +6,8 @@ sealed class Screen(val route: String) {
         fun createRoute(peerId: String) = "chat/$peerId"
     }
     object Settings : Screen("settings")
+    object VideoCall : Screen("video_call/{peerId}/{peerName}/{isIncoming}") {
+        fun createRoute(peerId: String, peerName: String, isIncoming: Boolean) =
+            "video_call/$peerId/${peerName.ifBlank { peerId.take(8) }}/$isIncoming"
+    }
 }

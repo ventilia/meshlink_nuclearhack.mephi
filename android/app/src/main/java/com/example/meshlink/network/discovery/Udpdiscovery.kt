@@ -9,34 +9,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.net.*
 
-/**
- * UdpDiscovery — ИСПРАВЛЕННАЯ ВЕРСИЯ v5
- *
- * ИСПРАВЛЕНИЕ #10 (ГЛАВНОЕ): Рефлексия broadcast через WiFi Direct интерфейс.
- *
- * ПРОБЛЕМА: Устройство имеет два активных интерфейса одновременно:
- *   - wlan0  → 192.168.0.106  (обычный Wi-Fi, роутер)
- *   - p2p0   → 192.168.49.1   (WiFi Direct group owner IP)
- *
- * DatagramSocket, биндированный на 0.0.0.0:8810, получает пакеты со ВСЕХ интерфейсов.
- * Broadcast, отправленный на 192.168.0.255, возвращается обратно через p2p-интерфейс
- * с source IP 192.168.49.1. Поскольку peerId в нём совпадает с собственным — пакет
- * отбрасывается как self-announce. Устройство B при этом никогда не видит пакеты A,
- * потому что находится в подсети 192.168.49.x (другой L2), куда роутер не пробрасывает
- * broadcast.
- *
- * РЕШЕНИЕ:
- * 1. ownIpSet — множество ВСЕХ собственных IPv4 адресов со всех интерфейсов.
- *    handleAnnounce отбрасывает пакет если senderIp ∈ ownIpSet (а не только по peerId).
- * 2. broadcastAnnounce() дополнительно шлёт unicast на IP всех уже известных пиров.
- *    Это критично для WiFi Direct: после первого TCP-соединения IP партнёра известен,
- *    и unicast надёжно доходит через p2p-интерфейс даже когда broadcast не работает.
- * 3. sendDirectAnnounce() остаётся для немедленного unicast при установке P2P-соединения.
- *
- * АНТИСПАМ:
- * - Интервал broadcast: 8с (меньше трафика)
- * - Один DatagramSocket вместо MulticastSocket — нет дублей пакетов
- */
+
 class UdpDiscovery(private val tcpPort: Int = 8800) {
 
     companion object {
@@ -76,11 +49,6 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
     @Volatile private var ownPublicKeyHex: String = ""
     @Volatile private var ownIp: String = ""
 
-    /**
-     * Множество ВСЕХ собственных IPv4-адресов со всех интерфейсов.
-     * Обновляется при каждом вызове updateOwnIp().
-     * Используется в handleAnnounce для отсева рефлексий broadcast.
-     */
     @Volatile private var ownIpSet: Set<String> = emptySet()
 
     fun updateOwnIdentity(peerId: String, username: String, shortCode: String, publicKeyHex: String) {
@@ -92,9 +60,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
 
     fun updateOwnIp(ip: String) {
         ownIp = ip
-        // Собираем ВСЕ собственные IPv4 адреса со всех активных интерфейсов.
-        // Это необходимо чтобы отфильтровать собственные broadcast-пакеты,
-        // которые возвращаются через WiFi Direct (p2p0) интерфейс с другим source IP.
+
         ownIpSet = try {
             NetworkInterface.getNetworkInterfaces()?.toList()
                 ?.filter { it.isUp && !it.isLoopback }
@@ -123,7 +89,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
         Log.i(TAG, "UDP discovery stopped")
     }
 
-    // ─── Приёмник ────────────────────────────────────────────────────────────
+
 
     private fun startReceiver() {
         scope.launch {
@@ -179,9 +145,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
 
             if (announce.peerId.isBlank()) return
 
-            // ИСПРАВЛЕНИЕ #10: фильтруем как по peerId, так и по IP отправителя.
-            // Если senderIp принадлежит нашему устройству (любой интерфейс) —
-            // это рефлексия собственного broadcast через WiFi Direct p2p интерфейс.
+
             if (announce.peerId == ownPeerId || senderIp in ownIpSet) {
                 Log.d(TAG, "Skip self-announce from $senderIp (self-reflection via secondary interface, ownIpSet=$ownIpSet)")
                 return
@@ -209,7 +173,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
         }
     }
 
-    // ─── Отправщик ──────────────────────────────────────────────────────────
+
 
     private fun startBroadcaster() {
         scope.launch {
@@ -230,7 +194,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
 
                 val sent = mutableSetOf<String>()
 
-                // 1. Broadcast на каждый интерфейс (как раньше)
+
                 getBroadcastAddresses().forEach { addr ->
                     if (sent.add(addr)) {
                         runCatching {
@@ -240,10 +204,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
                     }
                 }
 
-                // 2. ИСПРАВЛЕНИЕ #10: unicast на IP всех уже известных пиров.
-                // Критично для WiFi Direct: когда оба устройства в P2P-группе,
-                // broadcast не проходит между подсетями (192.168.0.x и 192.168.49.x).
-                // Но unicast на конкретный IP партнёра доходит всегда.
+
                 _peers.value.values.forEach { peer ->
                     if (sent.add(peer.ip)) {
                         runCatching {
@@ -293,7 +254,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
         return result
     }
 
-    // ─── Pruner ─────────────────────────────────────────────────────────────
+
 
     private fun startPruner() {
         scope.launch {
@@ -310,13 +271,7 @@ class UdpDiscovery(private val tcpPort: Int = 8800) {
         }
     }
 
-    // ─── Direct unicast ─────────────────────────────────────────────────────
 
-    /**
-     * Немедленно отправить announce напрямую на конкретный IP.
-     * Вызывается из NetworkManager при установке WiFi Direct соединения,
-     * а также при переподключении к известным пирам.
-     */
     fun sendDirectAnnounce(ip: String) {
         if (ownPeerId.isBlank() || ip.isBlank()) return
         scope.launch {

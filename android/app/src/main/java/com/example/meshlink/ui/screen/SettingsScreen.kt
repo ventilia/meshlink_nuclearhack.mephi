@@ -49,11 +49,7 @@ fun SettingsScreen(
     var usernameInput   by remember(username) { mutableStateOf(username) }
     var showRemovePhotoDialog by remember { mutableStateOf(false) }
 
-    /**
-     * Пикер изображения из галереи.
-     * Выбранный URI передаётся во ViewModel, который сохраняет файл
-     * и обновляет imageFileName в профиле.
-     */
+
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -67,7 +63,7 @@ fun SettingsScreen(
             .windowInsetsPadding(WindowInsets.systemBars)
             .verticalScroll(rememberScrollState())
     ) {
-        // ── Хедер ──────────────────────────────────────────────────────────────
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -102,7 +98,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        // ── МОЙ ПРОФИЛЬ ────────────────────────────────────────────────────────
+
         SettingsCard("// МОЙ ПРОФИЛЬ") {
             Row(
                 modifier = Modifier
@@ -112,12 +108,7 @@ fun SettingsScreen(
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                /**
-                 * Аватар — если фото установлено, показываем его через AsyncImage.
-                 * Если нет — показываем первую букву имени.
-                 * По клику — открываем пикер изображения.
-                 * По долгому удержанию — удалить фото (через диалог).
-                 */
+
                 Box(
                     modifier = Modifier
                         .size(70.dp)
@@ -135,7 +126,7 @@ fun SettingsScreen(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize().clip(CircleShape)
                         )
-                        // Оверлей «редактировать» поверх фото
+
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -151,7 +142,7 @@ fun SettingsScreen(
                             )
                         }
                     } else {
-                        // Нет фото — показываем букву и иконку камеры
+
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = username.take(1).uppercase().ifBlank { "?" },
@@ -187,7 +178,7 @@ fun SettingsScreen(
                         color = PixelText
                     )
                     Spacer(Modifier.height(6.dp))
-                    // Подсказка по фото
+
                     Text(
                         text = if (profileImageFileName.isNullOrBlank())
                             "нажмите на аватар чтобы добавить фото"
@@ -201,7 +192,7 @@ fun SettingsScreen(
                 }
             }
 
-            // Кнопка удалить фото — только если фото установлено
+
             if (!profileImageFileName.isNullOrBlank()) {
                 Spacer(Modifier.height(8.dp))
                 Box(
@@ -229,7 +220,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        // ── USERNAME ───────────────────────────────────────────────────────────
+
         SettingsCard("// ИМЯ ПОЛЬЗОВАТЕЛЯ") {
             if (editingUsername) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -315,7 +306,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        // ── СЕТЬ ──────────────────────────────────────────────────────────────
+
         SettingsCard("// СОСТОЯНИЕ СЕТИ") {
             SettingsRow(
                 "P2P СТАТУС",
@@ -340,7 +331,7 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        // ── RUST ЯДРО ─────────────────────────────────────────────────────────
+        // ── RUST ЯДРО
         SettingsCard("// RUST ЯДРО") {
             SettingsRow("ВЕРСИЯ", coreVersion)
             Spacer(Modifier.height(8.dp))
@@ -358,7 +349,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
     }
 
-    // ── Диалог подтверждения удаления фото ───────────────────────────────────
+
     if (showRemovePhotoDialog) {
         AlertDialog(
             onDismissRequest = { showRemovePhotoDialog = false },

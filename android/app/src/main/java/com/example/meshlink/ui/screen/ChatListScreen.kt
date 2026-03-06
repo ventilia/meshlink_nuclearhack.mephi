@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,6 +33,8 @@ import com.example.meshlink.ui.theme.*
 import com.example.meshlink.ui.viewmodel.ChatListViewModel
 import java.text.SimpleDateFormat
 import java.util.*
+import coil.compose.AsyncImage
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,6 +43,7 @@ fun ChatListScreen(
     onSettingsClick: () -> Unit,
     viewModel: ChatListViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     val shortCode = remember { NativeCore.getOwnShortCode() }
     val chatPreviews by viewModel.chatPreviews.collectAsState()
     val connectedDevices by viewModel.connectedDevices.collectAsState()
@@ -65,7 +69,7 @@ fun ChatListScreen(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-            // ── Хедер в стиле Telegram ───────────────────────────────────────
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -118,7 +122,7 @@ fun ChatListScreen(
                     }
                 }
 
-                // Кнопка настроек
+
                 Box(
                     modifier = Modifier
                         .size(38.dp)
@@ -137,7 +141,7 @@ fun ChatListScreen(
                 }
             }
 
-            // ── Строка статуса ───────────────────────────────────────────────
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -176,7 +180,7 @@ fun ChatListScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                // ── Раздел: поблизости ───────────────────────────────────────
+
                 if (connectedDevices.isNotEmpty()) {
                     item {
                         SectionHeader("ПОБЛИЗОСТИ")
@@ -193,19 +197,20 @@ fun ChatListScreen(
                     }
                 }
 
-                // ── Раздел: чаты ─────────────────────────────────────────────
+
                 if (chatPreviews.isNotEmpty()) {
                     item { SectionHeader("ЧАТЫ") }
                     items(chatPreviews, key = { it.contact.peerId }) { preview ->
                         ChatPreviewItem(
                             preview = preview,
+                            filesDir = context.filesDir,
                             onClick = { onChatClick(preview.contact.peerId) },
                             onLongPress = { viewModel.requestDeleteChat(preview.contact.peerId) }
                         )
                     }
                 }
 
-                // ── Пустое состояние ─────────────────────────────────────────
+
                 if (chatPreviews.isEmpty() && connectedDevices.isEmpty()) {
                     item {
                         Box(
@@ -250,7 +255,7 @@ fun ChatListScreen(
         )
     }
 
-    // ── Диалог удаления чата ─────────────────────────────────────────────────
+
     if (deleteConfirmPeerId != null) {
         val peerId = deleteConfirmPeerId!!
         val preview = chatPreviews.find { it.contact.peerId == peerId }
@@ -304,7 +309,7 @@ fun ChatListScreen(
     }
 }
 
-// ── Заголовок раздела ─────────────────────────────────────────────────────────
+
 @Composable
 private fun SectionHeader(title: String) {
     Text(
@@ -316,7 +321,7 @@ private fun SectionHeader(title: String) {
     )
 }
 
-// ── Элемент "поблизости" ──────────────────────────────────────────────────────
+
 @Composable
 private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
     Row(
@@ -327,7 +332,7 @@ private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Аватар
+
         Box(
             modifier = Modifier
                 .size(44.dp)
@@ -395,7 +400,7 @@ private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
             }
         }
 
-        // Стрелка / кнопка чата
+
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
@@ -413,10 +418,11 @@ private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
     }
 }
 
-// ── Превью чата ───────────────────────────────────────────────────────────────
+
 @Composable
 private fun ChatPreviewItem(
     preview: ChatPreview,
+    filesDir: File,
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
@@ -433,29 +439,15 @@ private fun ChatPreviewItem(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Аватар
-        Box(
-            modifier = Modifier
-                .size(50.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.linearGradient(
-                        listOf(PixelPurple, Color(0xFF2A1A4A))
-                    )
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            val initial = (preview.contact.username ?: preview.contact.peerId).take(1).uppercase()
-            Text(
-                initial,
-                fontFamily = PressStart2PFamily,
-                fontSize = 16.sp,
-                color = PixelText
-            )
-        }
 
+        ContactAvatarImage(
+            displayName = preview.contact.username ?: preview.contact.peerId,
+            imageFileName = preview.contact.imageFileName,
+            filesDir = filesDir,
+            size = 50.dp,
+            fontSize = 16.sp
+        )
         Spacer(Modifier.width(12.dp))
-
         Column(modifier = Modifier.weight(1f)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -519,8 +511,6 @@ private fun ChatPreviewItem(
             }
         }
     }
-
-    // Разделитель
     HorizontalDivider(
         color = PixelBorder.copy(alpha = 0.5f),
         thickness = 1.dp,
@@ -536,5 +526,46 @@ private fun formatTimestamp(timestamp: Long): String {
         diff < 3_600_000 -> "${diff / 60_000}м"
         diff < 86_400_000 -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
         else -> SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(timestamp))
+    }
+}
+
+
+@Composable
+fun ContactAvatarImage(
+    displayName: String,
+    imageFileName: String?,
+    filesDir: File,
+    size: androidx.compose.ui.unit.Dp,
+    fontSize: androidx.compose.ui.unit.TextUnit
+) {
+    val initial = displayName.take(1).uppercase()
+    val imagePath = imageFileName?.let { File(filesDir, it).absolutePath }
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                Brush.linearGradient(
+                    listOf(PixelPurple, Color(0xFF2A1A4A))
+                )
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (imagePath != null && File(imagePath).exists()) {
+            AsyncImage(
+                model = imagePath,
+                contentDescription = "Аватар",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+            )
+        } else {
+            Text(
+                text = initial,
+                fontFamily = PressStart2PFamily,
+                fontSize = fontSize,
+                color = PixelText
+            )
+        }
     }
 }

@@ -6,20 +6,7 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.util.Log
 
-/**
- * NSD (mDNS/Bonjour) discovery — находит устройства в LAN сети.
- *
- * Работает поверх UDP: когда WiFi Direct недоступен или устройства
- * подключены к одному роутеру — NSD обнаруживает их через multicast DNS.
- *
- * Это третий уровень discovery (после UDP broadcast и WiFi Direct):
- *   WiFi Direct → UDP broadcast → NSD/mDNS
- *
- * Ключевые особенности:
- * - Регистрирует сервис с именем содержащим peerId (для идентификации)
- * - При нахождении сервиса — резолвим IP и добавляем в callback
- * - Автоматический рестарт discovery при потере сервисов
- */
+
 class NsdDiscovery(
     private val context: Context,
     private val onPeerFound: (ip: String, port: Int, peerId: String, username: String) -> Unit,
@@ -60,7 +47,7 @@ class NsdDiscovery(
         nsdManager = null
     }
 
-    // ── Регистрация нашего сервиса ─────────────────────────────────
+
 
     private fun registerService(
         peerId: String,
@@ -75,7 +62,7 @@ class NsdDiscovery(
             serviceName = ownServiceName
             serviceType = SERVICE_TYPE
             setPort(port)
-            // TXT записи — дополнительная информация о пире
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 setAttribute(KEY_PEER_ID, peerId.take(32))
                 setAttribute(KEY_USERNAME, username.take(32))
@@ -124,7 +111,7 @@ class NsdDiscovery(
         isRegistered = false
     }
 
-    // ── Discovery ──────────────────────────────────────────────────
+
 
     private fun startDiscovery() {
         val mgr = nsdManager ?: return
@@ -134,7 +121,7 @@ class NsdDiscovery(
             override fun onStartDiscoveryFailed(serviceType: String, code: Int) {
                 Log.w(TAG, "NSD discovery start failed: $code")
                 isDiscovering = false
-                // Пробуем перезапустить через 5 секунд
+
                 Thread.sleep(5000)
                 startDiscovery()
             }
@@ -155,10 +142,10 @@ class NsdDiscovery(
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 val name = serviceInfo.serviceName
-                // Фильтруем себя
+
                 if (name == ownServiceName) return
                 Log.d(TAG, "NSD service found: '$name'")
-                // Резолвим только если ещё не резолвим этот сервис
+
                 if (resolving.add(name)) {
                     resolveService(serviceInfo)
                 }
@@ -168,7 +155,7 @@ class NsdDiscovery(
                 val name = serviceInfo.serviceName
                 Log.d(TAG, "NSD service lost: '$name'")
                 resolving.remove(name)
-                // Извлекаем peerId из имени сервиса
+
                 val peerId = name.removePrefix("ml_")
                 if (peerId.isNotBlank()) onPeerLost(peerId)
             }
@@ -212,7 +199,7 @@ class NsdDiscovery(
                 val port = info.port
                 val name = info.serviceName
 
-                // Извлекаем peerId из имени или TXT записей
+
                 var peerId = name.removePrefix("ml_")
                 var username = ""
 

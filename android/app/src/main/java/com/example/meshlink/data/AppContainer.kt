@@ -1,6 +1,7 @@
 package com.example.meshlink.data
 
 import android.content.Context
+import android.os.Build
 import com.example.meshlink.HandlerFactory
 import com.example.meshlink.MainActivity
 import com.example.meshlink.data.local.AppDataStore
@@ -11,6 +12,7 @@ import com.example.meshlink.data.repository.*
 import com.example.meshlink.domain.repository.*
 import com.example.meshlink.network.CallManager
 import com.example.meshlink.network.NetworkManager
+import com.example.meshlink.network.VideoCallManager
 import com.example.meshlink.network.wifidirect.WiFiDirectBroadcastReceiver
 
 interface AppContainer {
@@ -23,6 +25,7 @@ interface AppContainer {
     val fileManager: FileManager
     val networkManager: NetworkManager
     val callManager: CallManager
+    val videoCallManager: VideoCallManager?
     val aliasDao: AliasDAO
 }
 
@@ -34,7 +37,6 @@ class AppDataContainer(activity: MainActivity) : AppContainer {
     private val db by lazy { AppDatabase.get(context) }
 
     override val chatRepository: ChatRepository by lazy {
-        // ИСПРАВЛЕНО: передаём aliasDao чтобы список чатов показывал alias-имена
         ChatLocalRepository(db.accountDao(), db.profileDao(), db.messageDao(), db.aliasDao())
     }
 
@@ -76,5 +78,14 @@ class AppDataContainer(activity: MainActivity) : AppContainer {
 
     override val callManager: CallManager by lazy {
         CallManager(context)
+    }
+
+
+    override val videoCallManager: VideoCallManager? by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            VideoCallManager(context)
+        } else {
+            null
+        }
     }
 }

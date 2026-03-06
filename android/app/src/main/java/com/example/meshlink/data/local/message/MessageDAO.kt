@@ -20,16 +20,10 @@ interface MessageDAO {
     """)
     suspend fun getLastByPeerId(peerId: String): MessageEntity?
 
-    /**
-     * ИСПРАВЛЕНО: реактивная версия — Flow, который обновляется при каждом
-     * изменении таблицы. Старый suspend-вариант не реагировал на обновления
-     * статусов в реальном времени, из-за чего счётчик непрочитанных в списке
-     * чатов зависал навсегда.
-     */
     @Query("SELECT COUNT(*) FROM MessageEntity WHERE senderId = :peerId AND messageState = 'MESSAGE_RECEIVED'")
     fun countUnreadAsFlow(peerId: String): Flow<Long>
 
-    /** Оставляем suspend-версию для одноразовых запросов */
+
     @Query("SELECT COUNT(*) FROM MessageEntity WHERE senderId = :peerId AND messageState = 'MESSAGE_RECEIVED'")
     suspend fun countUnread(peerId: String): Long
 

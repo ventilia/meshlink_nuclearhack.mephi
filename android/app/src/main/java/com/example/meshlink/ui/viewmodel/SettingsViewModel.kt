@@ -18,10 +18,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         .map { it.username }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
-    /**
-     * Имя файла фото профиля (null если не установлено).
-     * Файл физически лежит в filesDir под этим именем.
-     */
+
     val profileImageFileName: StateFlow<String?> = container.ownProfileRepository
         .getProfileAsFlow()
         .map { it.imageFileName }
@@ -64,15 +61,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /**
-     * Сохраняет фото профиля из URI (выбранного через галерею/камеру).
-     *
-     * Алгоритм:
-     * 1. Копируем файл в filesDir через FileManager
-     * 2. Обновляем imageFileName в OwnProfileRepository (DataStore)
-     * 3. NetworkManager при следующем keepalive/profile-exchange отправит
-     *    обновлённый профиль соседним пирам
-     */
+
     fun setProfileImage(uri: Uri) {
         viewModelScope.launch {
             val peerId = ownPeerId.value.ifBlank { "own" }
@@ -83,7 +72,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /** Удалить фото профиля */
+
     fun removeProfileImage() {
         viewModelScope.launch {
             val currentFile = profileImageFileName.value

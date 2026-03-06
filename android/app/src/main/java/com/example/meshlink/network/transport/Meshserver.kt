@@ -49,7 +49,7 @@ class MeshServer(val port: Int = 8800) {
                     while (isActive) {
                         try {
                             val client = ss.accept()
-                            // Каждый клиент — отдельная корутина, accept() не блокируется
+
                             launch { handleClient(client) }
                         } catch (e: SocketException) {
                             if (!isActive) break

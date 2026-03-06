@@ -2,17 +2,17 @@ package com.example.meshlink.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// ─── Основная палитра MeshLink — тёмная пиксельная, без оранжевого ───────────
 
-// Фоны
-val PixelBlack      = Color(0xFF0A0A0F)   // фон приложения
-val PixelDarkGray   = Color(0xFF111118)   // фон карточек
-val PixelMidGray    = Color(0xFF1A1A28)   // элементы списка
-val PixelSurface    = Color(0xFF0D0D16)   // поверхность (хедер, инпут)
+
+
+val PixelBlack      = Color(0xFF0A0A0F)
+val PixelDarkGray   = Color(0xFF111118)
+val PixelMidGray    = Color(0xFF1A1A28)
+val PixelSurface    = Color(0xFF0D0D16)
 
 // Акценты
-val PixelAccent     = Color(0xFF00E676)   // ярко-зелёный — онлайн, кнопки
-val PixelAccentDark = Color(0xFF00A854)   // тёмно-зелёный — вторичные акценты
+val PixelAccent     = Color(0xFF00E676)
+val PixelAccentDark = Color(0xFF00A854)
 val PixelPurple     = Color(0xFF4A3F6B)   // тёмно-фиолетовый — фон баблов входящих
 val PixelPurpleLight= Color(0xFF6B5E99)   // светлее фиолетовый — borders
 

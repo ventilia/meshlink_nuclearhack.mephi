@@ -167,10 +167,7 @@ class WiFiDirectManager(private val context: Context) {
         }
     }
 
-    /**
-     * Удаляет текущую группу (если есть).
-     * Используется перед повторным createGroup() при ошибке BUSY.
-     */
+
     fun removeGroup(listener: WifiP2pManager.ActionListener) {
         if (!checkReady("removeGroup")) {
             listener.onFailure(WifiP2pManager.ERROR)

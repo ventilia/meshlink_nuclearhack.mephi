@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- res/xml/file_provider_paths.xml -->
+<!-- FileProvider нужен чтобы передать Uri файла сторонним приложениям (открыть файл) -->
+<paths>
+    <!-- filesDir — туда FileManager сохраняет все файлы -->
+    <files-path
+        name="shared_files"
+        path="." />
+    <!-- cacheDir — для временных файлов -->
+    <cache-path
+        name="shared_cache"
+        path="." />
+</paths>

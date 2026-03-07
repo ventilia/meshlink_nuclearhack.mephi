@@ -1,3 +1,6 @@
+// ==========================================
+// ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\network\transport\MeshServer.kt
+// ==========================================
 package com.example.meshlink.network.transport
 
 import android.util.Log
@@ -31,10 +34,10 @@ class MeshServer(val port: Int = 8800) {
     var onCallEnd: ((NetworkCallEnd) -> Unit)? = null
     var onCallAudio: ((ByteArray, String) -> Unit)? = null
 
-    // ── WebRTC callbacks ────────────────────────────────────────────────────
-    var onWebRtcOffer: ((NetworkWebRtcOffer) -> Unit)? = null
-    var onWebRtcAnswer: ((NetworkWebRtcAnswer) -> Unit)? = null
-    var onWebRtcIceCandidate: ((NetworkWebRtcIceCandidate) -> Unit)? = null
+    // ⛔️ WEBRTC CALLBACKS УДАЛЕНЫ:
+    // ❌ var onWebRtcOffer: ((NetworkWebRtcOffer) -> Unit)? = null
+    // ❌ var onWebRtcAnswer: ((NetworkWebRtcAnswer) -> Unit)? = null
+    // ❌ var onWebRtcIceCandidate: ((NetworkWebRtcIceCandidate) -> Unit)? = null
 
     fun start() {
         scope.launch {
@@ -121,19 +124,10 @@ class MeshServer(val port: Int = 8800) {
                     onCallEnd?.invoke(json.decodeFromString(payload.decodeToString()))
                 PacketType.CALL_AUDIO ->
                     onCallAudio?.invoke(payload, senderIp)
-                // ── WebRTC пакеты ────────────────────────────────────────────
-                PacketType.WEBRTC_OFFER -> {
-                    val offer = json.decodeFromString<NetworkWebRtcOffer>(payload.decodeToString())
-                    onWebRtcOffer?.invoke(offer)
-                }
-                PacketType.WEBRTC_ANSWER -> {
-                    val answer = json.decodeFromString<NetworkWebRtcAnswer>(payload.decodeToString())
-                    onWebRtcAnswer?.invoke(answer)
-                }
-                PacketType.WEBRTC_ICE_CANDIDATE -> {
-                    val candidate = json.decodeFromString<NetworkWebRtcIceCandidate>(payload.decodeToString())
-                    onWebRtcIceCandidate?.invoke(candidate)
-                }
+                // ⛔️ WEBRTC CASES УДАЛЕНЫ:
+                // ❌ PacketType.WEBRTC_OFFER -> { ... }
+                // ❌ PacketType.WEBRTC_ANSWER -> { ... }
+                // ❌ PacketType.WEBRTC_ICE_CANDIDATE -> { ... }
                 else ->
                     Log.w(TAG, "Unknown packet type=$type from $senderIp")
             }

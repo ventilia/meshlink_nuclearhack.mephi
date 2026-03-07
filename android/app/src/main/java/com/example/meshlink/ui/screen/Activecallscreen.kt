@@ -25,14 +25,6 @@ import com.example.meshlink.network.CallMetrics
 import com.example.meshlink.network.CallQuality
 import com.example.meshlink.ui.theme.*
 
-/**
- * ActiveCallScreen — полноэкранный UI активного аудиозвонка.
- *
- * ИСПРАВЛЕНО: кнопки Mute и Speaker теперь реально работают:
- * - isMuted / isSpeakerOn отражают реальное состояние AudioManager и CallManager
- * - onToggleMute → ChatViewModel.toggleMute() → CallManager.setMuted(true)
- * - onToggleSpeaker → ChatViewModel.toggleSpeaker() → AudioManager.isSpeakerphoneOn
- */
 @Composable
 fun ActiveCallScreen(
     peerName: String,
@@ -81,7 +73,6 @@ fun ActiveCallScreen(
         ) {
             Spacer(Modifier.height(56.dp))
 
-            // Статус + таймер
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier.size(8.dp)
@@ -106,7 +97,6 @@ fun ActiveCallScreen(
 
             Spacer(Modifier.weight(1f))
 
-            // Аватар с волнами
             Box(contentAlignment = Alignment.Center) {
                 Box(
                     Modifier.size(160.dp).scale(waveScale2).alpha(waveAlpha2)
@@ -139,18 +129,16 @@ fun ActiveCallScreen(
             Text("зашифрованный mesh-звонок", color = Color.White.copy(0.4f), fontSize = 11.sp)
             Spacer(Modifier.height(24.dp))
 
-            // Метрики
+            // Метрики качества
             CallQualityCard(metrics)
 
             Spacer(Modifier.weight(1f))
 
-            // Кнопки управления
             Row(
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(bottom = 16.dp)
             ) {
-                // Mute — ИСПРАВЛЕНО: реально заглушает микрофон
                 CallActionButton(
                     icon = if (isMuted) MeshIcons.MicOff else MeshIcons.Microphone,
                     label = if (isMuted) "АНМУТ" else "МУТ",
@@ -159,7 +147,6 @@ fun ActiveCallScreen(
                     onClick = onToggleMute
                 )
 
-                // Завершить звонок
                 Box(
                     modifier = Modifier
                         .size(72.dp)
@@ -175,7 +162,6 @@ fun ActiveCallScreen(
                     )
                 }
 
-                // Speaker — ИСПРАВЛЕНО: реально переключает динамик
                 CallActionButton(
                     icon = if (isSpeakerOn) MeshIcons.SpeakerOn else MeshIcons.SpeakerOff,
                     label = if (isSpeakerOn) "ГРОМ." else "ТРУБКА",
@@ -252,7 +238,6 @@ private fun CallQualityCard(metrics: CallMetrics) {
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Качество
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box(
                 Modifier.size(8.dp)
@@ -262,12 +247,10 @@ private fun CallQualityCard(metrics: CallMetrics) {
             Text(qualityText, color = qualityColor, fontSize = 7.sp, fontWeight = FontWeight.Bold)
         }
 
-        // RTT
         if (metrics.rttMs >= 0) {
             MetricItem("RTT", "${metrics.rttMs}мс")
         }
 
-        // Потери
         if (metrics.lossRatePercent > 0.1f) {
             MetricItem(
                 "ПОТЕРИ",
@@ -276,7 +259,6 @@ private fun CallQualityCard(metrics: CallMetrics) {
             )
         }
 
-        // Jitter
         if (metrics.jitterMs > 10) {
             MetricItem("JITTER", "${metrics.jitterMs}мс")
         }

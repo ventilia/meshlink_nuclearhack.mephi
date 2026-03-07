@@ -61,8 +61,7 @@ android {
 }
 
 dependencies {
-    // ── WebRTC — СТАБИЛЬНАЯ ВЕРСИЯ (не самая новая) ─────────────────────────
-    implementation("io.getstream:stream-webrtc-android:1.0.3")
+
 
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation(libs.androidx.core.ktx)

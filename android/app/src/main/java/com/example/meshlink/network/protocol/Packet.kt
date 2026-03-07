@@ -1,3 +1,6 @@
+// ==========================================
+// ФАЙЛ: Packet.kt
+// ==========================================
 package com.example.meshlink.network.protocol
 
 import kotlinx.serialization.Serializable
@@ -16,10 +19,6 @@ object PacketType {
     const val CALL_RESPONSE      = 10
     const val CALL_END           = 11
     const val CALL_AUDIO         = 12
-    // WebRTC сигналинг
-    const val WEBRTC_OFFER       = 100
-    const val WEBRTC_ANSWER      = 101
-    const val WEBRTC_ICE_CANDIDATE = 102
 }
 
 val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

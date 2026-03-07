@@ -25,31 +25,6 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * CallManager v3 — полностью рабочий менеджер голосовых звонков.
- *
- * ИСПРАВЛЕНИЯ v3:
- * 1. Реализован toggleMute() / setMuted():
- *    - При isMuted=true отправляем нулевые буферы вместо реального PCM.
- *    - Это корректная реализация "mute": микрофон продолжает читать (чтобы
- *      не было разрывов в потоке), но отправляются нулевые данные.
- *
- * 2. toggleSpeaker() теперь немедленно применяется через AudioManager.
- *    Раньше поле isSpeakerOn было private set — исправлено.
- *
- * 3. Улучшенная обработка ошибок AudioRecord: при ERROR_DEAD_OBJECT
- *    запись переинициализируется без обрыва звонка.
- *
- * 4. Адаптивный jitter-буфер работает корректно (исправлен расчёт expectedInterval).
- *
- * 5. Метрики: добавлено отображение isMuted в CallMetrics.
- *
- * ПРОТОКОЛ пакета (6 байт header + payload):
- *   [4 bytes: seq_num BE] [1 byte: flags] [1 byte: reserved] [payload: PCM]
- *
- *   flags:
- *     0x00 = обычный PCM
- *     0x01 = PING (RTT)
- *     0x02 = PONG (RTT)
- *     0x04 = MUTED (тишина, receiver может пропустить воспроизведение)
  */
 class CallManager(private val context: Context) {
 
@@ -142,20 +117,11 @@ class CallManager(private val context: Context) {
     @Volatile private var lastPingSentMs = 0L
     @Volatile private var lastRttMs = -1L
 
-    // ── МУТ — исправлен ───────────────────────────────────────────────────────
+    // ── МУТ ───────────────────────────────────────────────────────
 
-    /**
-     * isMuted — флаг заглушения микрофона.
-     * При true: запись продолжается, но отправляются нулевые данные.
-     * Это корректная реализация — предотвращает разрывы в UDP-потоке.
-     */
     @Volatile var isMuted: Boolean = false
         private set
 
-    /**
-     * Установить состояние мута.
-     * Потокобезопасно: volatile-запись.
-     */
     fun setMuted(muted: Boolean) {
         isMuted = muted
         Log.i(TAG, "Mute: ${if (muted) "ON 🔇" else "OFF 🎙️"}")
@@ -172,16 +138,13 @@ class CallManager(private val context: Context) {
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
 
-    /**
-     * Запустить UDP-сессию звонка.
-     */
     fun startSession(ip: String) {
         if (peerIp != null) {
             Log.w(TAG, "startSession: сессия уже активна, перезапускаем")
             stopSession()
         }
         peerIp = ip
-        isMuted = false // сбрасываем мут при новом звонке
+        isMuted = false
         Log.i(TAG, "startSession → $ip:$UDP_CALL_PORT (buf=${bufferSize}B, rate=${SAMPLE_RATE}Hz)")
 
         configureAudioManager()
@@ -197,9 +160,6 @@ class CallManager(private val context: Context) {
         }
     }
 
-    /**
-     * Fallback-запуск записи через колбэк (используется только если IP неизвестен).
-     */
     fun startRecording(onFragment: (ByteArray) -> Unit) {
         if (peerIp != null) {
             Log.d(TAG, "startRecording: UDP-сессия активна, игнорируем fallback")
@@ -235,7 +195,6 @@ class CallManager(private val context: Context) {
         Log.i(TAG, "stopSession complete")
     }
 
-    // Совместимость со старым кодом
     fun stopRecording() {
         runBlocking { recordingJob?.cancelAndJoin() }
         recordingJob = null
@@ -250,7 +209,6 @@ class CallManager(private val context: Context) {
         Log.i(TAG, "Playing stopped")
     }
 
-    /** Воспроизвести фрагмент напрямую (TCP fallback) */
     fun playFragment(data: ByteArray) {
         ensureAudioTrackStarted()
         try {
@@ -258,10 +216,6 @@ class CallManager(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    /**
-     * Переключить динамик / наушник.
-     * ИСПРАВЛЕНО: немедленно применяется через AudioManager.
-     */
     fun toggleSpeaker() {
         isSpeakerOn = !isSpeakerOn
         applySpeakerMode()
@@ -276,8 +230,6 @@ class CallManager(private val context: Context) {
             Log.w(TAG, "applySpeakerMode: ${e.message}")
         }
     }
-
-    // ── Аудиоменеджер ─────────────────────────────────────────────────────────
 
     private fun configureAudioManager() {
         try {
@@ -296,8 +248,6 @@ class CallManager(private val context: Context) {
             Log.i(TAG, "AudioManager restored to NORMAL")
         } catch (e: Exception) { Log.w(TAG, "restoreAudioManager: ${e.message}") }
     }
-
-    // ── Сокеты ────────────────────────────────────────────────────────────────
 
     private fun openSockets(ip: String) {
         try {
@@ -321,8 +271,6 @@ class CallManager(private val context: Context) {
         runCatching { receiveSocket?.close() }
         sendSocket = null; receiveSocket = null
     }
-
-    // ── Запись и отправка ─────────────────────────────────────────────────────
 
     private fun startUdpRecordingLoop(ip: String) {
         if (recordingJob?.isActive == true) return
@@ -354,7 +302,7 @@ class CallManager(private val context: Context) {
 
         recordingJob = scope.launch {
             val buffer = ByteArray(bufferSize)
-            val silenceBuffer = ByteArray(bufferSize) // нули — тишина при муте
+            val silenceBuffer = ByteArray(bufferSize)
             var running = true
             Log.i(TAG, "UDP recording loop start → $ip:$UDP_CALL_PORT")
 
@@ -362,7 +310,6 @@ class CallManager(private val context: Context) {
                 val read = record.read(buffer, 0, buffer.size)
                 when {
                     read > 0 -> {
-                        // МУТ: отправляем нулевые данные с флагом FLAG_MUTED
                         val (dataToSend, flags) = if (isMuted) {
                             Pair(silenceBuffer, FLAG_MUTED)
                         } else {
@@ -382,7 +329,6 @@ class CallManager(private val context: Context) {
                         Log.w(TAG, "AudioRecord DEAD_OBJECT — reinitializing...")
                         runCatching { record.stop(); record.release() }
                         audioRecord = null
-                        // Переинициализация без обрыва звонка
                         delay(200)
                         val newRecord = buildAudioRecord() ?: break
                         audioRecord = newRecord
@@ -450,15 +396,12 @@ class CallManager(private val context: Context) {
         return packet
     }
 
-    // ── Воспроизведение ───────────────────────────────────────────────────────
-
     private fun startPlaybackPipeline() {
         ensureAudioTrackStarted()
         val socket = receiveSocket ?: run {
             Log.e(TAG, "startPlaybackPipeline: receiveSocket == null"); return
         }
 
-        // Поток 1: UDP → jitterBuffer
         receiveJob = scope.launch {
             val buf = ByteArray(bufferSize * 2 + HEADER_SIZE)
             val packet = DatagramPacket(buf, buf.size)
@@ -475,18 +418,15 @@ class CallManager(private val context: Context) {
 
                     val flags = data[4]
 
-                    // RTT PONG
                     if (flags == FLAG_PONG && lastPingSentMs > 0) {
                         lastRttMs = System.currentTimeMillis() - lastPingSentMs
                         Log.v(TAG, "RTT=${lastRttMs}ms")
                         continue
                     }
-                    // Ответ на PING
                     if (flags == FLAG_PING) {
                         sendPong(packet.address.hostAddress ?: continue)
                         continue
                     }
-                    // Мут-пакет от собеседника — пропускаем воспроизведение (тишина не нужна)
                     if (flags == FLAG_MUTED) {
                         packetsReceived.incrementAndGet()
                         continue
@@ -494,7 +434,6 @@ class CallManager(private val context: Context) {
 
                     packetsReceived.incrementAndGet()
 
-                    // Подсчёт потерь по seq
                     val seq = ((data[0].toLong() and 0xFF) shl 24) or
                             ((data[1].toLong() and 0xFF) shl 16) or
                             ((data[2].toLong() and 0xFF) shl 8) or
@@ -506,7 +445,6 @@ class CallManager(private val context: Context) {
                     }
                     lastSeqReceived = seq
 
-                    // Jitter measurement
                     val now = System.currentTimeMillis()
                     if (lastPacketArrivalMs > 0) {
                         val gap = now - lastPacketArrivalMs
@@ -523,7 +461,7 @@ class CallManager(private val context: Context) {
                     } else continue
 
                     if (!jitterBuffer.offer(pcm)) {
-                        jitterBuffer.poll() // drop oldest, keep fresh
+                        jitterBuffer.poll()
                         jitterBuffer.offer(pcm)
                     }
                 } catch (e: SocketTimeoutException) {
@@ -536,7 +474,6 @@ class CallManager(private val context: Context) {
             Log.i(TAG, "UDP receive loop end")
         }
 
-        // Поток 2: jitterBuffer → AudioTrack
         playbackJob = scope.launch {
             Log.i(TAG, "Playback loop start")
             while (isActive) {
@@ -557,8 +494,6 @@ class CallManager(private val context: Context) {
             Log.i(TAG, "Playback loop end")
         }
     }
-
-    // ── Ping / RTT ────────────────────────────────────────────────────────────
 
     private fun startPingLoop(ip: String) {
         pingJob = scope.launch {
@@ -600,8 +535,6 @@ class CallManager(private val context: Context) {
         catch (_: Exception) {}
     }
 
-    // ── Адаптивный jitter-буфер ───────────────────────────────────────────────
-
     private fun adaptJitterBuffer() {
         synchronized(jitterSamples) {
             if (jitterSamples.size < 5) return
@@ -609,7 +542,6 @@ class CallManager(private val context: Context) {
             val variance = jitterSamples.map { (it - avg) * (it - avg) }.average()
             val stdDev = Math.sqrt(variance)
 
-            // ~20ms на фрагмент при 16kHz / bufferSize
             val expectedInterval = bufferSize.toDouble() / (SAMPLE_RATE * 2) * 1000.0
 
             currentJitterSize = when {
@@ -621,8 +553,6 @@ class CallManager(private val context: Context) {
             }
         }
     }
-
-    // ── Метрики ───────────────────────────────────────────────────────────────
 
     private fun startMetricsLoop() {
         metricsJob = scope.launch {
@@ -657,8 +587,6 @@ class CallManager(private val context: Context) {
             }
         }
     }
-
-    // ── AudioTrack ────────────────────────────────────────────────────────────
 
     private fun ensureAudioTrackStarted() {
         if (audioTrack != null) return
@@ -702,8 +630,6 @@ class CallManager(private val context: Context) {
         Log.d(TAG, "Audio resources released")
     }
 
-    // ── Fallback запись через колбэк ──────────────────────────────────────────
-
     private fun startCallbackRecordingLoop(onFragment: (ByteArray) -> Unit) {
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) return
@@ -727,7 +653,6 @@ class CallManager(private val context: Context) {
                 val read = record.read(buffer, 0, buffer.size)
                 when {
                     read > 0 -> {
-                        // При муте отправляем тишину
                         val data = if (isMuted) silence.copyOf(read) else buffer.copyOf(read)
                         onFragment(data)
                     }
@@ -740,9 +665,12 @@ class CallManager(private val context: Context) {
     }
 }
 
+// ==========================================
+// ВЫНЕСТИ ЗА ПРЕДЕЛЫ КЛАССА — в конец файла
+// ==========================================
+
 /**
  * Метрики качества голосового звонка.
- * ДОБАВЛЕНО: isMuted — состояние мута для отображения в UI.
  */
 data class CallMetrics(
     val rttMs: Long = -1,
@@ -760,4 +688,8 @@ data class CallMetrics(
     }
 }
 
-// В конце файла CallManager.kt заменить:
+enum class CallQuality {
+    GOOD,
+    FAIR,
+    POOR
+}

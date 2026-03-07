@@ -1,6 +1,3 @@
-// ==========================================
-// ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\network\NetworkManager.kt
-// ==========================================
 package com.example.meshlink.network
 
 import android.content.Context
@@ -79,9 +76,11 @@ class NetworkManager(
 
     private val server = MeshServer(TCP_PORT)
     private val client = MeshClient(TCP_PORT)
+
     private val bluetoothTransport = BluetoothTransport(context) { type, payload, sender ->
         dispatchIncomingPacket(type, payload, sender)
     }
+
     private val udpDiscovery = UdpDiscovery(TCP_PORT)
     val peerRegistry = PeerRegistry()
     private var nsdDiscovery: NsdDiscovery? = null
@@ -92,12 +91,9 @@ class NetworkManager(
     private val profileRequestInFlight = mutableSetOf<String>()
     private val profileLock = Any()
 
-    // ── Call Signaling Flows - ИСПРАВЛЕНО: разделение по типам ───────────────
-    private val _audioCallRequest = MutableStateFlow<NetworkCallRequest?>(null)
-    val audioCallRequest: StateFlow<NetworkCallRequest?> = _audioCallRequest
-
-    private val _videoCallRequest = MutableStateFlow<NetworkCallRequest?>(null)
-    val videoCallRequest: StateFlow<NetworkCallRequest?> = _videoCallRequest
+    // ── Call Signaling Flows ─────────────────────────────────────────────────
+    private val _callRequest = MutableStateFlow<NetworkCallRequest?>(null)
+    val callRequest: StateFlow<NetworkCallRequest?> = _callRequest
 
     private val _callResponse = MutableStateFlow<NetworkCallResponse?>(null)
     val callResponse: StateFlow<NetworkCallResponse?> = _callResponse
@@ -108,15 +104,7 @@ class NetworkManager(
     private val _callFragment = MutableStateFlow<ByteArray?>(null)
     val callFragment: StateFlow<ByteArray?> = _callFragment
 
-    // ── WebRTC Signaling Flows - ТОЛЬКО для видео ─────────────────────────────
-    private val _webRtcOffer = MutableStateFlow<NetworkWebRtcOffer?>(null)
-    val webRtcOffer: StateFlow<NetworkWebRtcOffer?> = _webRtcOffer
 
-    private val _webRtcAnswer = MutableStateFlow<NetworkWebRtcAnswer?>(null)
-    val webRtcAnswer: StateFlow<NetworkWebRtcAnswer?> = _webRtcAnswer
-
-    private val _webRtcIceCandidate = MutableStateFlow<NetworkWebRtcIceCandidate?>(null)
-    val webRtcIceCandidate: StateFlow<NetworkWebRtcIceCandidate?> = _webRtcIceCandidate
 
     fun start() {
         if (started) return
@@ -232,6 +220,99 @@ class NetworkManager(
         )
     }
 
+
+    private fun setupServerHandlers() {
+        server.onKeepalive = { keepalive, senderIp ->
+            scope.launch {
+                identityReady.await()
+                handleKeepalive(keepalive, senderIp)
+            }
+        }
+        server.onProfileRequest = { req, senderIp ->
+            scope.launch {
+                identityReady.await()
+                if (req.senderId.isNotBlank()) handleProfileRequest(req, senderIp)
+            }
+        }
+        server.onProfileResponse = { res -> handleProfileResponse(res) }
+        server.onTextMessage = { msg -> handleTextMessage(msg) }
+        server.onFileMessage = { msg -> handleFileMessage(msg) }
+        server.onAudioMessage = { msg -> handleAudioMessage(msg) }
+        server.onAckReceived = { ack -> handleAckReceived(ack) }
+        server.onAckRead = { ack -> handleAckRead(ack) }
+
+        // ── Call Signaling ─────────────────────────────────────────────────
+        server.onCallRequest = { req ->
+            _callRequest.value = req
+            if (!AppForegroundTracker.isInForeground()) {
+                scope.launch {
+                    val contact = contactRepository.getAllContactsAsFlow().first()
+                        .find { it.peerId == req.senderId }
+                    val callerName = contact?.username ?: req.senderId.take(8).uppercase()
+                    NotificationHelper.showCallNotification(context, callerName, req.senderId)
+                }
+            }
+        }
+        server.onCallResponse = { res -> _callResponse.value = res }
+        server.onCallEnd = { end ->
+            _callEnd.value = end
+            NotificationHelper.dismissCallNotification(context)
+        }
+        server.onCallAudio = { bytes, _ -> _callFragment.value = bytes }
+    }
+
+
+    private fun dispatchIncomingPacket(type: Int, payload: ByteArray, senderAddress: String) {
+        try {
+            when (type) {
+                PacketType.KEEPALIVE -> scope.launch {
+                    identityReady.await()
+                    handleKeepalive(
+                        json.decodeFromString<NetworkKeepalive>(payload.decodeToString()),
+                        senderAddress
+                    )
+                }
+                PacketType.TEXT_MESSAGE -> handleTextMessage(
+                    json.decodeFromString<NetworkTextMessage>(payload.decodeToString())
+                )
+                PacketType.FILE_MESSAGE -> handleFileMessage(
+                    json.decodeFromString<NetworkFileMessage>(payload.decodeToString())
+                )
+                PacketType.AUDIO_MESSAGE -> handleAudioMessage(
+                    json.decodeFromString<NetworkAudioMessage>(payload.decodeToString())
+                )
+                PacketType.PROFILE_REQUEST -> scope.launch {
+                    identityReady.await()
+                    handleProfileRequest(
+                        json.decodeFromString<NetworkProfileRequest>(payload.decodeToString()),
+                        senderAddress
+                    )
+                }
+                PacketType.PROFILE_RESPONSE -> handleProfileResponse(
+                    json.decodeFromString<NetworkProfileResponse>(payload.decodeToString())
+                )
+                PacketType.CALL_REQUEST -> _callRequest.value =
+                    json.decodeFromString<NetworkCallRequest>(payload.decodeToString())
+                PacketType.CALL_RESPONSE -> _callResponse.value =
+                    json.decodeFromString<NetworkCallResponse>(payload.decodeToString())
+                PacketType.CALL_END -> {
+                    _callEnd.value = json.decodeFromString<NetworkCallEnd>(payload.decodeToString())
+                    NotificationHelper.dismissCallNotification(context)
+                }
+                PacketType.CALL_AUDIO -> _callFragment.value = payload
+                PacketType.ACK_RECEIVED -> handleAckReceived(
+                    json.decodeFromString<NetworkMessageAck>(payload.decodeToString())
+                )
+                PacketType.ACK_READ -> handleAckRead(
+                    json.decodeFromString<NetworkMessageAck>(payload.decodeToString())
+                )
+                else -> Log.d(TAG, "BT unknown packet type=$type from $senderAddress")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "BT dispatch error type=$type: ${e.message}")
+        }
+    }
+
     private fun saveKnownIp(ip: String) {
         if (ip.isBlank()) return
         val current = prefs.getStringSet(PREFS_KEY_KNOWN_IPS, mutableSetOf()) ?: mutableSetOf()
@@ -256,231 +337,13 @@ class NetworkManager(
         }
     }
 
-    private fun setupServerHandlers() {
-        server.onKeepalive = { keepalive, senderIp ->
-            scope.launch {
-                identityReady.await()
-                handleKeepalive(keepalive, senderIp)
-            }
-        }
-        server.onProfileRequest = { req, senderIp ->
-            scope.launch {
-                identityReady.await()
-                if (req.senderId.isNotBlank()) handleProfileRequest(req, senderIp)
-            }
-        }
-        server.onProfileResponse = { res -> handleProfileResponse(res) }
-        server.onTextMessage = { msg -> handleTextMessage(msg) }
-        server.onFileMessage = { msg -> handleFileMessage(msg) }
-        server.onAudioMessage = { msg -> handleAudioMessage(msg) }
-        server.onAckReceived = { ack -> handleAckReceived(ack) }
-        server.onAckRead = { ack -> handleAckRead(ack) }
 
-        // ── ИСПРАВЛЕНО: Разделение аудио и видео звонков ─────────────────────
-        server.onCallRequest = { req ->
-            scope.launch {
-                identityReady.await()
-                Log.i(TAG, "CallRequest received: type=${req.callType} from ${req.senderId.take(8)}")
 
-                // Проверяем тип звонка и маршрутизируем в разные Flow
-                when (req.callType) {
-                    CallType.AUDIO -> {
-                        _audioCallRequest.value = req
-                        // Уведомление только если не в фокусе И не в чате с этим пользователем
-                        if (!AppForegroundTracker.isInForeground()) {
-                            showCallNotification(req.senderId, req.callType)
-                        }
-                    }
-                    CallType.VIDEO -> {
-                        _videoCallRequest.value = req
-                        // Для видео звонков всегда показываем уведомление если не в фокусе
-                        if (!AppForegroundTracker.isInForeground()) {
-                            showCallNotification(req.senderId, req.callType)
-                        }
-                    }
-                }
-            }
-        }
 
-        server.onCallResponse = { res -> _callResponse.value = res }
-        server.onCallEnd = { end ->
-            _callEnd.value = end
-            NotificationHelper.dismissCallNotification(context)
-        }
-        server.onCallAudio = { bytes, _ -> _callFragment.value = bytes }
 
-        // ── WebRTC Signaling Handlers - ТОЛЬКО для видео ─────────────────────
-        server.onWebRtcOffer = { offer ->
-            scope.launch {
-                identityReady.await()
-                // Проверяем что это действительно видео звонок
-                if (offer.callType == CallType.VIDEO) {
-                    if (offer.receiverId == ownPeerId) {
-                        Log.d(TAG, "WebRTC Offer received from ${offer.senderId.take(8)}")
-                        _webRtcOffer.value = offer
-                        if (!AppForegroundTracker.isInForeground()) {
-                            showCallNotification(offer.senderId, CallType.VIDEO)
-                        }
-                    } else if (offer.ttl > 0) {
-                        forwardWebRtcOffer(offer)
-                    }
-                } else {
-                    Log.w(TAG, "WebRTC Offer with wrong callType=${offer.callType}, ignoring")
-                }
-            }
-        }
 
-        server.onWebRtcAnswer = { answer ->
-            scope.launch {
-                identityReady.await()
-                if (answer.callType == CallType.VIDEO) {
-                    if (answer.receiverId == ownPeerId) {
-                        Log.d(TAG, "WebRTC Answer received from ${answer.senderId.take(8)}")
-                        _webRtcAnswer.value = answer
-                    } else if (answer.ttl > 0) {
-                        forwardWebRtcAnswer(answer)
-                    }
-                }
-            }
-        }
 
-        server.onWebRtcIceCandidate = { candidate ->
-            scope.launch {
-                identityReady.await()
-                if (candidate.callType == CallType.VIDEO) {
-                    if (candidate.receiverId == ownPeerId) {
-                        Log.v(TAG, "WebRTC ICE candidate received from ${candidate.senderId.take(8)}")
-                        _webRtcIceCandidate.value = candidate
-                    } else if (candidate.ttl > 0) {
-                        forwardWebRtcIceCandidate(candidate)
-                    }
-                }
-            }
-        }
-    }
 
-    // ── НОВОЕ: Метод для показа уведомлений о звонках ────────────────────────
-    private suspend fun showCallNotification(senderId: String, callType: CallType) {
-        try {
-            val contact = contactRepository.getAllContactsAsFlow().first()
-                .find { it.peerId == senderId }
-            val callerName = contact?.username ?: senderId.take(8).uppercase()
-
-            when (callType) {
-                CallType.AUDIO -> {
-                    NotificationHelper.showCallNotification(context, callerName, senderId, CallType.AUDIO)
-                }
-                CallType.VIDEO -> {
-                    NotificationHelper.showCallNotification(context, callerName, senderId, CallType.VIDEO)
-                }
-            }
-            Log.i(TAG, "Call notification shown for $callerName (${callType})")
-        } catch (e: Exception) {
-            Log.e(TAG, "showCallNotification failed: ${e.message}")
-        }
-    }
-
-    private fun dispatchIncomingPacket(type: Int, payload: ByteArray, senderAddress: String) {
-        try {
-            when (type) {
-                PacketType.KEEPALIVE -> scope.launch {
-                    identityReady.await()
-                    handleKeepalive(json.decodeFromString(payload.decodeToString()), senderAddress)
-                }
-                PacketType.TEXT_MESSAGE -> handleTextMessage(json.decodeFromString(payload.decodeToString()))
-                PacketType.FILE_MESSAGE -> handleFileMessage(json.decodeFromString(payload.decodeToString()))
-                PacketType.PROFILE_REQUEST -> scope.launch {
-                    identityReady.await()
-                    handleProfileRequest(json.decodeFromString(payload.decodeToString()), senderAddress)
-                }
-                PacketType.PROFILE_RESPONSE -> handleProfileResponse(json.decodeFromString(payload.decodeToString()))
-                PacketType.WEBRTC_OFFER -> {
-                    val offer = json.decodeFromString<NetworkWebRtcOffer>(payload.decodeToString())
-                    setupServerHandlers().let { server.onWebRtcOffer?.invoke(offer) }
-                }
-                PacketType.WEBRTC_ANSWER -> {
-                    val answer = json.decodeFromString<NetworkWebRtcAnswer>(payload.decodeToString())
-                    setupServerHandlers().let { server.onWebRtcAnswer?.invoke(answer) }
-                }
-                PacketType.WEBRTC_ICE_CANDIDATE -> {
-                    val candidate = json.decodeFromString<NetworkWebRtcIceCandidate>(payload.decodeToString())
-                    setupServerHandlers().let { server.onWebRtcIceCandidate?.invoke(candidate) }
-                }
-                else -> Log.d(TAG, "BT unknown packet type=$type from $senderAddress")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "BT dispatch error type=$type: ${e.message}")
-        }
-    }
-
-    // ── WebRTC Forwarding Methods ───────────────────────────────────────────
-    private suspend fun forwardWebRtcOffer(offer: NetworkWebRtcOffer) {
-        val relayed = offer.copy(ttl = offer.ttl - 1)
-        val payload = json.encodeToString(NetworkWebRtcOffer.serializer(), relayed).encodeToByteArray()
-        sendPacket(offer.receiverId, PacketType.WEBRTC_OFFER, payload, "forward-webrtc-offer")
-    }
-
-    private suspend fun forwardWebRtcAnswer(answer: NetworkWebRtcAnswer) {
-        val relayed = answer.copy(ttl = answer.ttl - 1)
-        val payload = json.encodeToString(NetworkWebRtcAnswer.serializer(), relayed).encodeToByteArray()
-        sendPacket(answer.receiverId, PacketType.WEBRTC_ANSWER, payload, "forward-webrtc-answer")
-    }
-
-    private suspend fun forwardWebRtcIceCandidate(candidate: NetworkWebRtcIceCandidate) {
-        val relayed = candidate.copy(ttl = candidate.ttl - 1)
-        val payload = json.encodeToString(NetworkWebRtcIceCandidate.serializer(), relayed).encodeToByteArray()
-        sendPacket(candidate.receiverId, PacketType.WEBRTC_ICE_CANDIDATE, payload, "forward-webrtc-ice")
-    }
-
-    // ── WebRTC Send Methods - ИСПРАВЛЕНО: явный callType ────────────────────
-    fun sendWebRtcOffer(peerId: String, sdpJson: String, withVideo: Boolean) {
-        scope.launch {
-            identityReady.await()
-            val packet = NetworkWebRtcOffer(
-                senderId = ownPeerId,
-                receiverId = peerId,
-                sdpJson = sdpJson,
-                withVideo = withVideo,
-                ttl = 5,
-                callType = CallType.VIDEO  // Явно указываем VIDEO
-            )
-            val payload = json.encodeToString(NetworkWebRtcOffer.serializer(), packet).encodeToByteArray()
-            sendPacket(peerId, PacketType.WEBRTC_OFFER, payload, "sendWebRtcOffer")
-            Log.d(TAG, "WebRTC Offer sent to ${peerId.take(8)}")
-        }
-    }
-
-    fun sendWebRtcAnswer(peerId: String, sdpJson: String) {
-        scope.launch {
-            identityReady.await()
-            val packet = NetworkWebRtcAnswer(
-                senderId = ownPeerId,
-                receiverId = peerId,
-                sdpJson = sdpJson,
-                ttl = 5,
-                callType = CallType.VIDEO  // Явно указываем VIDEO
-            )
-            val payload = json.encodeToString(NetworkWebRtcAnswer.serializer(), packet).encodeToByteArray()
-            sendPacket(peerId, PacketType.WEBRTC_ANSWER, payload, "sendWebRtcAnswer")
-            Log.d(TAG, "WebRTC Answer sent to ${peerId.take(8)}")
-        }
-    }
-
-    fun sendWebRtcIceCandidate(peerId: String, candidateJson: String) {
-        scope.launch {
-            identityReady.await()
-            val packet = NetworkWebRtcIceCandidate(
-                senderId = ownPeerId,
-                receiverId = peerId,
-                candidateJson = candidateJson,
-                ttl = 5,
-                callType = CallType.VIDEO  // Явно указываем VIDEO
-            )
-            val payload = json.encodeToString(NetworkWebRtcIceCandidate.serializer(), packet).encodeToByteArray()
-            sendPacket(peerId, PacketType.WEBRTC_ICE_CANDIDATE, payload, "sendWebRtcIce")
-            Log.v(TAG, "WebRTC ICE candidate sent to ${peerId.take(8)}")
-        }
-    }
 
     // ── Остальные методы NetworkManager (без изменений) ─────────────────────
     private fun getCurrentOwnIp(): String? {
@@ -672,12 +535,10 @@ class NetworkManager(
                 d.peerId.isNotBlank() && d.peerId != ownPeerId
             }?.peerId
             ?: ""
-
         if (fromPeerId == ownPeerId) {
             Log.v(TAG, "handleKeepalive: игнорируем keepalive от самих себя (self-echo)")
             return
         }
-
         for (device in keepalive.devices) {
             if (device.peerId.isBlank()) continue
             if (device.peerId == ownPeerId) {
@@ -711,7 +572,6 @@ class NetworkManager(
                 udpDiscovery.sendDirectAnnounce(effectiveIp)
             }
         }
-
         if (NativeCore.isInitialized() && fromPeerId.isNotBlank()) {
             val peers = keepalive.devices
                 .filter { it.peerId != ownPeerId && it.peerId != fromPeerId && it.peerId.isNotBlank() }
@@ -725,7 +585,6 @@ class NetworkManager(
             val peersJson = org.json.JSONArray(peers).toString()
             NativeCore.updateRoutingTable(fromPeerId, senderIp, peersJson)
         }
-
         keepalive.routingTableJson?.let { rtJson ->
             if (rtJson.isNotBlank() && rtJson != "[]" && fromPeerId.isNotBlank()) {
                 processRemoteRoutingTable(rtJson, senderIp, fromPeerId)
@@ -1027,7 +886,7 @@ class NetworkManager(
         client.sendAckReceived(ip, NetworkMessageAck(messageId, ownPeerId, peerId))
     }
 
-    fun sendCallRequest(peerId: String, callType: CallType = CallType.AUDIO) {
+    fun sendCallRequest(peerId: String) {
         val ip = peerRegistry.getIp(peerId) ?: run {
             Log.w(TAG, "sendCallRequest: no IP for ${peerId.take(8)}")
             return
@@ -1035,8 +894,8 @@ class NetworkManager(
         scope.launch {
             repeat(3) { attempt ->
                 try {
-                    client.sendCallRequest(ip, NetworkCallRequest(ownPeerId, peerId, callType))
-                    Log.d(TAG, "sendCallRequest OK (attempt ${attempt + 1}, type=$callType) → $ip")
+                    client.sendCallRequest(ip, NetworkCallRequest(ownPeerId, peerId))
+                    Log.d(TAG, "sendCallRequest OK (attempt ${attempt + 1}) → $ip")
                     return@launch
                 } catch (e: Exception) {
                     Log.w(TAG, "sendCallRequest attempt ${attempt + 1} failed: ${e.message}")
@@ -1047,8 +906,7 @@ class NetworkManager(
         }
     }
 
-
-    fun sendCallResponse(peerId: String, accepted: Boolean, callType: CallType = CallType.AUDIO) {
+    fun sendCallResponse(peerId: String, accepted: Boolean) {
         val ip = peerRegistry.getIp(peerId) ?: run {
             Log.w(TAG, "sendCallResponse: no IP for ${peerId.take(8)}")
             return
@@ -1056,8 +914,8 @@ class NetworkManager(
         scope.launch {
             repeat(3) { attempt ->
                 try {
-                    client.sendCallResponse(ip, NetworkCallResponse(ownPeerId, peerId, accepted, callType))
-                    Log.d(TAG, "sendCallResponse accepted=$accepted OK (attempt ${attempt + 1}, type=$callType) → $ip")
+                    client.sendCallResponse(ip, NetworkCallResponse(ownPeerId, peerId, accepted))
+                    Log.d(TAG, "sendCallResponse accepted=$accepted OK (attempt ${attempt + 1}) → $ip")
                     return@launch
                 } catch (e: Exception) {
                     Log.w(TAG, "sendCallResponse attempt ${attempt + 1} failed: ${e.message}")
@@ -1067,7 +925,7 @@ class NetworkManager(
         }
     }
 
-    fun sendCallEnd(peerId: String, callType: CallType = CallType.AUDIO) {
+    fun sendCallEnd(peerId: String) {
         val ip = peerRegistry.getIp(peerId) ?: run {
             Log.w(TAG, "sendCallEnd: no IP for ${peerId.take(8)}")
             return
@@ -1075,7 +933,7 @@ class NetworkManager(
         scope.launch {
             repeat(2) { attempt ->
                 try {
-                    client.sendCallEnd(ip, NetworkCallEnd(ownPeerId, peerId, callType))
+                    client.sendCallEnd(ip, NetworkCallEnd(ownPeerId, peerId))
                     return@launch
                 } catch (e: Exception) {
                     Log.w(TAG, "sendCallEnd attempt ${attempt + 1} failed: ${e.message}")
@@ -1091,14 +949,11 @@ class NetworkManager(
     }
 
     fun resetCallState() {
-        _audioCallRequest.value = null
-        _videoCallRequest.value = null
+        _callRequest.value = null
         _callResponse.value = null
         _callEnd.value = null
         _callFragment.value = null
-        _webRtcOffer.value = null
-        _webRtcAnswer.value = null
-        _webRtcIceCandidate.value = null
+
         NotificationHelper.dismissCallNotification(context)
     }
 

@@ -1,3 +1,6 @@
+// ==========================================
+// ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\ui\viewmodel\Videocallviewmodel.kt
+// ==========================================
 package com.example.meshlink.ui.viewmodel
 
 import android.app.Application
@@ -8,8 +11,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.meshlink.MeshLinkApp
 import com.example.meshlink.MeshLinkAppProvider
 import com.example.meshlink.core.MeshLogger
-import com.example.meshlink.network.CallMetrics
-import com.example.meshlink.network.CallQuality
+import com.example.meshlink.domain.model.CallType
+import com.example.meshlink.network.CallManager
 import com.example.meshlink.network.VideoCallManager
 import com.example.meshlink.network.VideoMetrics
 import com.example.meshlink.ui.screen.VideoCallState
@@ -25,7 +28,6 @@ class VideoCallViewModel(
     application: Application,
     val peerId: String
 ) : AndroidViewModel(application) {
-
     companion object {
         private const val TAG = "VideoCallViewModel"
         private const val OUTGOING_TIMEOUT_MS = 45_000L
@@ -37,7 +39,7 @@ class VideoCallViewModel(
     private val callManager = container.callManager
 
     // ── UI состояние ──────────────────────────────────────────────────────────
-
+    // ИСПРАВЛЕНО: используем OUTGOING вместо IDLE (IDLE не существует в VideoCallState)
     private val _callState = MutableStateFlow(VideoCallState.OUTGOING)
     val callState: StateFlow<VideoCallState> = _callState
 
@@ -47,7 +49,7 @@ class VideoCallViewModel(
     private val _isMuted = MutableStateFlow(false)
     val isMuted: StateFlow<Boolean> = _isMuted
 
-    private val _isSpeakerOn = MutableStateFlow(true)  // По умолчанию включён для видео
+    private val _isSpeakerOn = MutableStateFlow(true)
     val isSpeakerOn: StateFlow<Boolean> = _isSpeakerOn
 
     private val _isFrontCamera = MutableStateFlow(true)
@@ -60,10 +62,10 @@ class VideoCallViewModel(
     val callDuration: StateFlow<Long> = _callDuration
 
     // ── Внутреннее состояние ──────────────────────────────────────────────────
-
     private var durationJob: Job? = null
     private var metricsJob: Job? = null
     private var timeoutJob: Job? = null
+    private var isIncoming: Boolean = false
 
     init {
         Log.i(TAG, "VideoCallViewModel created for ${peerId.take(8)}")
@@ -73,26 +75,26 @@ class VideoCallViewModel(
     }
 
     // ── Инициализация разрешений ──────────────────────────────────────────────
-
     fun onPermissionsGranted(isIncoming: Boolean) {
         Log.i(TAG, "Permissions granted, isIncoming=$isIncoming")
+        this.isIncoming = isIncoming
+
         if (isIncoming) {
             _callState.value = VideoCallState.INCOMING
         } else {
-            // Исходящий — уже показываем OUTGOING, ждём принятия через сигналинг
+            _callState.value = VideoCallState.OUTGOING
             startOutgoingTimeout()
         }
     }
 
-    // ── Наблюдение сигналинга ─────────────────────────────────────────────────
-
+    // ── Наблюдение сигналинга — ИСПРАВЛЕНО: только VIDEO звонки ─────────────
     private fun observeCallSignals() {
-        // Ответ на исходящий звонок
+        // Ответ на исходящий ВИДЕО звонок
         viewModelScope.launch {
             networkManager.callResponse.collect { res ->
-                if (res != null && res.senderId == peerId) {
+                if (res != null && res.senderId == peerId && res.callType == CallType.VIDEO) {
                     timeoutJob?.cancel()
-                    Log.i(TAG, "callResponse from ${peerId.take(8)}: accepted=${res.accepted}")
+                    Log.i(TAG, "Video callResponse from ${peerId.take(8)}: accepted=${res.accepted}")
                     if (res.accepted) {
                         MeshLogger.звонокПринят(peerId)
                         startVideoCall()
@@ -104,14 +106,25 @@ class VideoCallViewModel(
             }
         }
 
-        // Завершение звонка удалённой стороной
+        // Завершение ВИДЕО звонка
         viewModelScope.launch {
             networkManager.callEnd.collect { end ->
-                if (end != null && end.senderId == peerId) {
+                if (end != null && end.senderId == peerId && end.callType == CallType.VIDEO) {
                     MeshLogger.звонокЗавершён(peerId, "удалённый пир")
-                    Log.i(TAG, "callEnd from ${peerId.take(8)}")
+                    Log.i(TAG, "Video callEnd from ${peerId.take(8)}")
                     stopVideoCall()
                     _callState.value = VideoCallState.ENDED
+                }
+            }
+        }
+
+        // WebRTC Offer для входящего видео звонка
+        viewModelScope.launch {
+            networkManager.webRtcOffer.collect { offer ->
+                if (offer != null && offer.receiverId == peerId) {
+                    Log.i(TAG, "WebRTC Offer received for video call")
+                    isIncoming = true
+                    _callState.value = VideoCallState.INCOMING
                 }
             }
         }
@@ -119,7 +132,6 @@ class VideoCallViewModel(
 
     private fun observeVideoManagerCallbacks() {
         val manager = videoCallManager ?: return
-
         manager.onConnected = { connectedPeerId ->
             if (connectedPeerId == peerId) {
                 Log.i(TAG, "✅ WebRTC connected to ${peerId.take(8)}")
@@ -127,7 +139,6 @@ class VideoCallViewModel(
                 startDurationTimer()
             }
         }
-
         manager.onDisconnected = { disconnectedPeerId ->
             if (disconnectedPeerId == peerId) {
                 Log.w(TAG, "❌ WebRTC disconnected from ${peerId.take(8)}")
@@ -144,25 +155,16 @@ class VideoCallViewModel(
                     _metrics.value = vm
                 }
             } else {
-                // Fallback — аудио метрики
-                callManager.metrics.collect { am ->
-                    _metrics.value = VideoMetrics(
-                        rttMs           = am.rttMs,
-                        lossRatePercent = am.lossRatePercent,
-                        jitterMs        = am.jitterMs,
-                        quality         = am.quality
-                    )
-                }
+                Log.w(TAG, "VideoCallManager not available for metrics")
             }
         }
     }
 
     // ── Управление звонком ────────────────────────────────────────────────────
-
     fun acceptCall() {
         Log.i(TAG, "acceptCall: ${peerId.take(8)}")
         MeshLogger.звонокПринят(peerId)
-        networkManager.sendCallResponse(peerId, true)
+        networkManager.sendCallResponse(peerId, true, CallType.VIDEO)
         _callState.value = VideoCallState.ACTIVE
         startVideoCall()
     }
@@ -170,14 +172,14 @@ class VideoCallViewModel(
     fun rejectCall() {
         Log.i(TAG, "rejectCall: ${peerId.take(8)}")
         MeshLogger.звонокОтклонён(peerId)
-        networkManager.sendCallResponse(peerId, false)
+        networkManager.sendCallResponse(peerId, false, CallType.VIDEO)
         _callState.value = VideoCallState.ENDED
     }
 
     fun cancelCall() {
         Log.i(TAG, "cancelCall (timeout/user): ${peerId.take(8)}")
         timeoutJob?.cancel()
-        networkManager.sendCallEnd(peerId)
+        networkManager.sendCallEnd(peerId, CallType.VIDEO)
         stopVideoCall()
         _callState.value = VideoCallState.ENDED
     }
@@ -185,36 +187,35 @@ class VideoCallViewModel(
     fun endCall() {
         Log.i(TAG, "endCall: ${peerId.take(8)}")
         MeshLogger.звонокЗавершён(peerId, "локально")
-        networkManager.sendCallEnd(peerId)
+        networkManager.sendCallEnd(peerId, CallType.VIDEO)
         stopVideoCall()
         _callState.value = VideoCallState.ENDED
     }
 
+    // ── Инициализация видео звонка через WebRTC ──────────────────────────────
     private fun startVideoCall() {
         MeshLogger.звонокАктивен(peerId)
         Log.i(TAG, "Starting video call session with ${peerId.take(8)}")
 
         val manager = videoCallManager
         if (manager != null) {
-            // WebRTC путь — лучшее качество, адаптивный битрейт, DTLS шифрование
+            val engine = container.webRtcEngine
+            if (engine == null) {
+                Log.e(TAG, "WebRtcEngine not available!")
+                _callState.value = VideoCallState.ENDED
+                return
+            }
+
             Log.i(TAG, "Using WebRTC for video call")
             manager.startSession(peerId, null)
-            // Включаем динамик для видеозвонка
             setSpeakerEnabled(true)
-        } else {
-            // Fallback — UDP аудио без видео
-            Log.w(TAG, "VideoCallManager not available, falling back to UDP audio")
-            val ip = networkManager.getIpForPeer(peerId)
-            if (ip != null) {
-                callManager.startSession(ip)
-                setSpeakerEnabled(true)
-                // Без WebRTC переходим в ACTIVE сразу
-                _callState.value = VideoCallState.ACTIVE
-                startDurationTimer()
-            } else {
-                Log.e(TAG, "No IP available for ${peerId.take(8)}")
-                _callState.value = VideoCallState.ENDED
+
+            if (!isIncoming) {
+                Log.i(TAG, "Initiating WebRTC outgoing call")
             }
+        } else {
+            Log.e(TAG, "VideoCallManager not available!")
+            _callState.value = VideoCallState.ENDED
         }
     }
 
@@ -222,7 +223,6 @@ class VideoCallViewModel(
         durationJob?.cancel()
         durationJob = null
         _callDuration.value = 0L
-
         videoCallManager?.stopSession()
         callManager.stopSession()
         networkManager.resetCallState()
@@ -235,7 +235,7 @@ class VideoCallViewModel(
             if (isActive && _callState.value == VideoCallState.OUTGOING) {
                 Log.w(TAG, "Outgoing video call timeout for ${peerId.take(8)}")
                 MeshLogger.звонокЗавершён(peerId, "таймаут")
-                networkManager.sendCallEnd(peerId)
+                networkManager.sendCallEnd(peerId, CallType.VIDEO)
                 _callState.value = VideoCallState.ENDED
             }
         }
@@ -253,27 +253,13 @@ class VideoCallViewModel(
     }
 
     // ── Управление медиа во время звонка ─────────────────────────────────────
-
-    /**
-     * Заглушить/разглушить микрофон.
-     * Реальное заглушение через WebRtcEngine.setMuted() или CallManager.setMuted().
-     */
     fun toggleMute() {
         val muted = !_isMuted.value
         _isMuted.value = muted
         Log.d(TAG, "Mute: $muted")
-
-        if (videoCallManager != null) {
-            videoCallManager.setMuted(muted)
-        } else {
-            callManager.setMuted(muted)
-        }
+        videoCallManager?.setMuted(muted)
     }
 
-    /**
-     * Переключить динамик/наушники.
-     * Реальное переключение через AudioManager.
-     */
     fun toggleSpeaker() {
         val speakerOn = !_isSpeakerOn.value
         _isSpeakerOn.value = speakerOn
@@ -282,16 +268,11 @@ class VideoCallViewModel(
 
     private fun setSpeakerEnabled(enabled: Boolean) {
         if (_isSpeakerOn.value != enabled) _isSpeakerOn.value = enabled
-        // CallManager управляет AudioManager
-        // ИСПРАВЛЕНО: isSpeakerOn — это property, не function (убраны скобки)
-        if (enabled != callManager.isSpeakerOn) {  // <-- ИСПРАВЛЕНО: без ()
+        if (enabled != callManager.isSpeakerOn) {
             callManager.toggleSpeaker()
         }
     }
 
-    /**
-     * Включить/выключить камеру.
-     */
     fun toggleCamera() {
         val cameraOn = !_isCameraOn.value
         _isCameraOn.value = cameraOn
@@ -299,9 +280,6 @@ class VideoCallViewModel(
         Log.d(TAG, "Camera: $cameraOn")
     }
 
-    /**
-     * Переключить фронтальную/тыловую камеру.
-     */
     fun flipCamera() {
         _isFrontCamera.value = !_isFrontCamera.value
         videoCallManager?.flipCamera()
@@ -309,7 +287,6 @@ class VideoCallViewModel(
     }
 
     // ── Рендереры ─────────────────────────────────────────────────────────────
-
     fun attachLocalRenderer(renderer: SurfaceViewRenderer) {
         videoCallManager?.attachLocalRenderer(renderer)
     }
@@ -327,7 +304,6 @@ class VideoCallViewModel(
     }
 
     // ── Жизненный цикл ────────────────────────────────────────────────────────
-
     override fun onCleared() {
         super.onCleared()
         Log.d(TAG, "onCleared for ${peerId.take(8)}")

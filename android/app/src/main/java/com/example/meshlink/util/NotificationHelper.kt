@@ -1,3 +1,6 @@
+// ==========================================
+// ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\util\NotificationHelper.kt
+// ==========================================
 package com.example.meshlink.util
 
 import android.annotation.SuppressLint
@@ -11,7 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.example.meshlink.MainActivity
 import com.example.meshlink.R
-
+import com.example.meshlink.domain.model.CallType
 
 object NotificationHelper {
 
@@ -19,7 +22,6 @@ object NotificationHelper {
     const val CHANNEL_CALLS    = "meshlink_calls"
 
     private const val CALL_NOTIFICATION_ID = 9001
-
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -50,7 +52,6 @@ object NotificationHelper {
         }
     }
 
-
     @SuppressLint("MissingPermission")
     fun showMessageNotification(
         context: Context,
@@ -58,7 +59,6 @@ object NotificationHelper {
         text: String,
         peerId: String
     ) {
-
         if (!hasNotificationPermission(context)) return
 
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -80,27 +80,31 @@ object NotificationHelper {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-
             .setGroup("meshlink_messages_$peerId")
             .build()
 
-
         NotificationManagerCompat.from(context).notify(peerId.hashCode(), notification)
     }
-
 
     @SuppressLint("MissingPermission")
     fun showCallNotification(
         context: Context,
         callerName: String,
-        peerId: String
+        peerId: String,
+        callType: CallType = CallType.AUDIO
     ) {
         if (!hasNotificationPermission(context)) return
+
+        val callTypeText = when (callType) {
+            CallType.AUDIO -> "Аудиозвонок"
+            CallType.VIDEO -> "Видеозвонок"
+        }
 
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("peerId", peerId)
             putExtra("incoming_call", true)
+            putExtra("call_type", callType.name)
         }
         val openPendingIntent = PendingIntent.getActivity(
             context,
@@ -110,27 +114,23 @@ object NotificationHelper {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
-            .setContentTitle("Входящий звонок")
+            .setContentTitle("Входящий $callTypeText")
             .setContentText(callerName)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(openPendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-
             .setFullScreenIntent(openPendingIntent, true)
-
             .setOngoing(true)
             .build()
 
         NotificationManagerCompat.from(context).notify(CALL_NOTIFICATION_ID, notification)
     }
 
-
     fun dismissCallNotification(context: Context) {
         NotificationManagerCompat.from(context).cancel(CALL_NOTIFICATION_ID)
     }
-
 
     fun hasNotificationPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

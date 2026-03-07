@@ -1,10 +1,12 @@
+// ==========================================
+// ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\domain\model\NetworkDevice.kt
+// ==========================================
 package com.example.meshlink.domain.model
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.InternalSerializationApi
 
 @OptIn(InternalSerializationApi::class)
-
 @Serializable
 data class NetworkDevice(
     val peerId: String,
@@ -17,19 +19,15 @@ data class NetworkDevice(
     val viaPeerId: String? = null
 ) {
     val isDirect: Boolean get() = hopCount <= 1 && viaPeerId == null
-
     val isMeshRelay: Boolean get() = hopCount > 1 && viaPeerId != null
 }
 
 @Serializable
 data class NetworkKeepalive(
     val devices: List<NetworkDevice>,
-
     val senderPeerId: String? = null,
-
     val routingTableJson: String? = null
 )
-
 
 @Serializable
 data class NetworkProfileRequest(
@@ -53,7 +51,6 @@ data class NetworkTextMessage(
     val receiverId: String,
     val timestamp: Long,
     val text: String,
-
     val ttl: Int = 5
 )
 
@@ -85,22 +82,26 @@ data class NetworkMessageAck(
     val receiverId: String
 )
 
-
+// ─── Call Request — ИСПРАВЛЕНО: добавлен callType ───────────────────────────
 @Serializable
 data class NetworkCallRequest(
     val senderId: String,
-    val receiverId: String
+    val receiverId: String,
+    val callType: CallType = CallType.AUDIO,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 @Serializable
 data class NetworkCallResponse(
     val senderId: String,
     val receiverId: String,
-    val accepted: Boolean
+    val accepted: Boolean,
+    val callType: CallType = CallType.AUDIO
 )
 
 @Serializable
 data class NetworkCallEnd(
     val senderId: String,
-    val receiverId: String
+    val receiverId: String,
+    val callType: CallType = CallType.AUDIO
 )

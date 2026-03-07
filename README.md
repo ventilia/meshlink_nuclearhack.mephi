@@ -15,6 +15,7 @@
 
 ---
 
+ссылка на скрины и демонстрацию - https://drive.google.com/drive/folders/12cERJTQNI-NCqVdQfagxxUZHQHf3cYVi?usp=sharing
 ## Содержание
 
 - [Архитектура проекта](#архитектура-проекта)

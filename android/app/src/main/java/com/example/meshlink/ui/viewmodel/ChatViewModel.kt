@@ -1,4 +1,6 @@
+// ==========================================
 // ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\ui\viewmodel\ChatViewModel.kt
+// ==========================================
 package com.example.meshlink.ui.viewmodel
 
 import android.app.Application
@@ -13,7 +15,6 @@ import com.example.meshlink.MeshLinkApp
 import com.example.meshlink.MeshLinkAppProvider
 import com.example.meshlink.core.MeshLogger
 import com.example.meshlink.data.local.alias.AliasEntity
-import com.example.meshlink.domain.model.CallType
 import com.example.meshlink.domain.model.message.Message
 import com.example.meshlink.domain.model.message.MessageState
 import com.example.meshlink.network.AudioPlaybackManager
@@ -31,6 +32,7 @@ class ChatViewModel(
     application: Application,
     val peerId: String
 ) : AndroidViewModel(application) {
+
     companion object {
         private const val TAG = "ChatViewModel"
         private const val OUTGOING_CALL_TIMEOUT_MS = 30_000L
@@ -41,23 +43,19 @@ class ChatViewModel(
     private val callManager: CallManager = container.callManager
     private val audioPlayback = AudioPlaybackManager(application)
 
+    // ── Сообщения ─────────────────────────────────────────────────────────────
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages
 
     private val _isRecording = MutableStateFlow(false)
     val isRecording: StateFlow<Boolean> = _isRecording
 
-    private val _incomingCallType = MutableStateFlow<CallType?>(null)
-    val incomingCallType: StateFlow<CallType?> = _incomingCallType
-
+    // ── Состояние звонка (ТОЛЬКО АУДИО) ──────────────────────────────────────
     private val _incomingCall = MutableStateFlow<String?>(null)
     val incomingCall: StateFlow<String?> = _incomingCall
 
     private val _outgoingCall = MutableStateFlow(false)
     val outgoingCall: StateFlow<Boolean> = _outgoingCall
-
-    private val _outgoingCallType = MutableStateFlow<CallType>(CallType.AUDIO)
-    val outgoingCallType: StateFlow<CallType> = _outgoingCallType
 
     private val _callActive = MutableStateFlow(false)
     val callActive: StateFlow<Boolean> = _callActive
@@ -73,10 +71,7 @@ class ChatViewModel(
     private val _isSpeakerOn = MutableStateFlow(false)
     val isSpeakerOn: StateFlow<Boolean> = _isSpeakerOn
 
-    // ИСПРАВЛЕНО: Канал для перенаправления пользователя на экран видеозвонка
-    private val _incomingVideoCallEvent = MutableSharedFlow<String>()
-    val incomingVideoCallEvent = _incomingVideoCallEvent.asSharedFlow()
-
+    // ── Профиль ───────────────────────────────────────────────────────────────
     val playingFile: StateFlow<String?> = audioPlayback.playingFile
 
     val contactName: StateFlow<String?> = combine(
@@ -108,6 +103,7 @@ class ChatViewModel(
     val ownPeerId: StateFlow<String> = networkManager.ownPeerIdFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
+    // ── Внутреннее ────────────────────────────────────────────────────────────
     private var audioTempFile: File? = null
     private var currentRecorder: android.media.MediaRecorder? = null
     private var ringtonePlayer: android.media.MediaPlayer? = null
@@ -119,8 +115,10 @@ class ChatViewModel(
         observeCallSignals()
         observeCallFragments()
         MeshLogger.системаСтарт(peerId, "ChatVM")
+        Log.i(TAG, "ChatViewModel launched for ${peerId.take(8)}")
     }
 
+    // ── Наблюдение ────────────────────────────────────────────────────────────
     private fun observeMessages() {
         viewModelScope.launch {
             container.chatRepository.getMessagesByPeerIdAsFlow(peerId).collectLatest {
@@ -130,61 +128,50 @@ class ChatViewModel(
     }
 
     private fun observeCallSignals() {
-        // Аудио звонки
+        // Входящий звонок
         viewModelScope.launch {
-            networkManager.audioCallRequest.collect { req ->
+            networkManager.callRequest.collect { req ->
                 if (req != null && req.senderId == peerId) {
-                    Log.i(TAG, "Incoming AUDIO call from ${peerId.take(8)}")
                     MeshLogger.звонокВходящий(peerId)
-                    _incomingCallType.value = CallType.AUDIO
+                    Log.i(TAG, "Incoming call from ${peerId.take(8)}")
                     _incomingCall.value = req.senderId
                     startRingtone()
                 }
             }
         }
 
-        // ИСПРАВЛЕНО: Эмитим событие при получении видеозвонка для навигации
-        viewModelScope.launch {
-            networkManager.videoCallRequest.collect { req ->
-                if (req != null && req.senderId == peerId) {
-                    Log.i(TAG, "Incoming VIDEO call from ${peerId.take(8)}, triggering navigation")
-                    MeshLogger.звонокВходящий(peerId)
-                    _incomingVideoCallEvent.emit(req.senderId)
-                }
-            }
-        }
-
+        // Ответ на исходящий звонок
         viewModelScope.launch {
             networkManager.callResponse.collect { res ->
                 if (res != null && res.senderId == peerId) {
+                    Log.i(TAG, "callResponse from ${peerId.take(8)}: accepted=${res.accepted}")
                     outgoingCallTimeoutJob?.cancel()
                     stopRingtone()
 
-                    if (res.callType == _outgoingCallType.value) {
-                        if (res.accepted) {
-                            MeshLogger.звонокПринят(peerId)
-                            _outgoingCall.value = false
-                            startActiveCall(_outgoingCallType.value)
-                        } else {
-                            MeshLogger.звонокОтклонён(peerId)
-                            _outgoingCall.value = false
-                            networkManager.resetCallState()
-                        }
+                    if (res.accepted) {
+                        MeshLogger.звонокПринят(peerId)
+                        _outgoingCall.value = false
+                        startActiveCall()
+                    } else {
+                        MeshLogger.звонокОтклонён(peerId)
+                        _outgoingCall.value = false
+                        networkManager.resetCallState()
                     }
                 }
             }
         }
 
+        // Завершение звонка
         viewModelScope.launch {
             networkManager.callEnd.collect { end ->
                 if (end != null && end.senderId == peerId) {
                     MeshLogger.звонокЗавершён(peerId, "удалённый пир")
+                    Log.i(TAG, "callEnd from ${peerId.take(8)}")
                     outgoingCallTimeoutJob?.cancel()
                     stopRingtone()
                     stopCallDurationTimer()
                     _outgoingCall.value = false
                     _incomingCall.value = null
-                    _incomingCallType.value = null
                     _callActive.value = false
                     callManager.stopSession()
                     _isMuted.value = false
@@ -205,6 +192,7 @@ class ChatViewModel(
         }
     }
 
+    // ── Рингтон ───────────────────────────────────────────────────────────────
     private fun startRingtone() {
         stopRingtone()
         try {
@@ -217,7 +205,9 @@ class ChatViewModel(
                 prepare()
                 start()
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Ringtone failed: ${e.message}")
+        }
     }
 
     private fun stopRingtone() {
@@ -230,6 +220,7 @@ class ChatViewModel(
         } catch (_: Exception) {}
     }
 
+    // ── Таймер звонка ─────────────────────────────────────────────────────────
     private fun startCallDurationTimer() {
         _callDuration.value = 0L
         callDurationJob?.cancel()
@@ -247,7 +238,9 @@ class ChatViewModel(
         _callDuration.value = 0L
     }
 
+    // ── Сообщения ─────────────────────────────────────────────────────────────
     fun sendText(peerId: String, text: String) {
+        MeshLogger.сообщениеОтправлено("ТЕКСТ", peerId, System.currentTimeMillis())
         networkManager.sendTextMessage(peerId, text)
     }
 
@@ -280,6 +273,7 @@ class ChatViewModel(
                 currentRecorder = recorder
             }
         } catch (e: Exception) {
+            Log.e(TAG, "startRecording: ${e.message}")
             _isRecording.value = false
         }
     }
@@ -291,7 +285,9 @@ class ChatViewModel(
                 currentRecorder?.stop()
                 currentRecorder?.release()
                 currentRecorder = null
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.w(TAG, "stopRecorder: ${e.message}")
+            }
             val file = audioTempFile
             if (file != null && file.exists() && file.length() > 0) {
                 networkManager.sendAudioMessage(peerId, file)
@@ -310,6 +306,7 @@ class ChatViewModel(
                 .filter { it.senderId == peerId && it.messageState == MessageState.MESSAGE_RECEIVED }
                 .forEach { msg ->
                     container.chatRepository.updateMessageState(msg.messageId, MessageState.MESSAGE_READ)
+                    MeshLogger.подтверждениеПрочтения(msg.messageId, peerId)
                     networkManager.sendMessageReadAck(peerId, msg.messageId)
                 }
         }
@@ -325,21 +322,17 @@ class ChatViewModel(
         }
     }
 
-    fun requestCall(callType: CallType = CallType.AUDIO) {
+    // ── Звонки (ТОЛЬКО АУДИО) ─────────────────────────────────────────────────
+    fun requestCall() {
         MeshLogger.звонокИсходящий(peerId)
         _outgoingCall.value = true
-        _outgoingCallType.value = callType
+        networkManager.sendCallRequest(peerId)
 
-        if (callType == CallType.VIDEO) {
-            _outgoingCall.value = false
-            return
-        }
-
-        networkManager.sendCallRequest(peerId, CallType.AUDIO)
         outgoingCallTimeoutJob?.cancel()
         outgoingCallTimeoutJob = viewModelScope.launch {
             delay(OUTGOING_CALL_TIMEOUT_MS)
             if (_outgoingCall.value) {
+                Log.w(TAG, "Outgoing call timeout to ${peerId.take(8)}")
                 MeshLogger.звонокЗавершён(peerId, "таймаут")
                 _outgoingCall.value = false
                 networkManager.resetCallState()
@@ -348,30 +341,25 @@ class ChatViewModel(
     }
 
     fun acceptCall() {
-        val callType = _incomingCallType.value ?: CallType.AUDIO
         MeshLogger.звонокПринят(peerId)
         stopRingtone()
-        networkManager.sendCallResponse(peerId, true, callType)
-        startActiveCall(callType)
+        networkManager.sendCallResponse(peerId, true)
+        startActiveCall()
         _incomingCall.value = null
-        _incomingCallType.value = null
     }
 
     fun rejectCall() {
-        val callType = _incomingCallType.value ?: CallType.AUDIO
         MeshLogger.звонокОтклонён(peerId)
         stopRingtone()
-        networkManager.sendCallResponse(peerId, false, callType)
+        networkManager.sendCallResponse(peerId, false)
         _incomingCall.value = null
-        _incomingCallType.value = null
     }
 
     fun endCall() {
         outgoingCallTimeoutJob?.cancel()
         if (_callActive.value || _outgoingCall.value) {
             MeshLogger.звонокЗавершён(peerId, "локально")
-            val callType = if (_outgoingCall.value) _outgoingCallType.value else CallType.AUDIO
-            networkManager.sendCallEnd(peerId, callType)
+            networkManager.sendCallEnd(peerId)
         }
         stopRingtone()
         stopCallDurationTimer()
@@ -379,42 +367,48 @@ class ChatViewModel(
         _callActive.value = false
         _outgoingCall.value = false
         _incomingCall.value = null
-        _incomingCallType.value = null
         _isMuted.value = false
         _isSpeakerOn.value = false
         networkManager.resetCallState()
     }
 
-    private fun startActiveCall(callType: CallType) {
+    private fun startActiveCall() {
         MeshLogger.звонокАктивен(peerId)
         _callActive.value = true
         startCallDurationTimer()
 
-        if (callType == CallType.AUDIO) {
-            if (callManager.hasAudioPermission(getApplication())) {
-                val ip = networkManager.getIpForPeer(peerId)
-                if (ip != null) {
-                    callManager.startSession(ip)
-                } else {
-                    callManager.startRecording { fragment ->
-                        networkManager.sendCallFragment(peerId, fragment)
-                    }
+        if (callManager.hasAudioPermission(getApplication())) {
+            val ip = networkManager.getIpForPeer(peerId)
+            if (ip != null) {
+                Log.i(TAG, "Starting UDP audio session → $ip")
+                callManager.startSession(ip)
+            } else {
+                Log.w(TAG, "No IP for ${peerId.take(8)} — fallback TCP")
+                callManager.startRecording { fragment ->
+                    MeshLogger.фрагментЗвонкаОтправлен(peerId, fragment.size)
+                    networkManager.sendCallFragment(peerId, fragment)
                 }
             }
+        } else {
+            Log.w(TAG, "No RECORD_AUDIO permission")
         }
     }
 
+    // ── Управление звуком во время звонка ─────────────────────────────────────
     fun toggleMute() {
         val muted = !_isMuted.value
         _isMuted.value = muted
         callManager.setMuted(muted)
+        Log.d(TAG, "Microphone: ${if (muted) "MUTED" else "ACTIVE"}")
     }
 
     fun toggleSpeaker() {
         callManager.toggleSpeaker()
         _isSpeakerOn.value = callManager.isSpeakerOn
+        Log.d(TAG, "Speaker: ${_isSpeakerOn.value}")
     }
 
+    // ── Жизненный цикл ────────────────────────────────────────────────────────
     override fun onCleared() {
         super.onCleared()
         outgoingCallTimeoutJob?.cancel()

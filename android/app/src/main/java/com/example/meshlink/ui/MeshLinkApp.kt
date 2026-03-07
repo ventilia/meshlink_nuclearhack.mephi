@@ -9,7 +9,7 @@ import com.example.meshlink.ui.navigation.Screen
 import com.example.meshlink.ui.screen.ChatListScreen
 import com.example.meshlink.ui.screen.ChatScreen
 import com.example.meshlink.ui.screen.SettingsScreen
-import com.example.meshlink.ui.screen.VideoCallScreen
+
 
 @Composable
 fun MeshLinkApp() {
@@ -36,9 +36,7 @@ fun MeshLinkApp() {
                 peerId = peerId,
                 onBack = { navController.popBackStack() },
                 // ИСПРАВЛЕНО: Принимаем флаг isIncoming и прокидываем в маршрут
-                onVideoCallClick = { peerName, isIncoming ->
-                    navController.navigate(Screen.VideoCall.createRoute(peerId, peerName, isIncoming))
-                }
+
             )
         }
 
@@ -48,17 +46,5 @@ fun MeshLinkApp() {
             )
         }
 
-        composable(Screen.VideoCall.route) { backStackEntry ->
-            val peerId = backStackEntry.arguments?.getString("peerId") ?: return@composable
-            val peerName = backStackEntry.arguments?.getString("peerName") ?: ""
-            val isIncoming = backStackEntry.arguments?.getString("isIncoming")?.toBoolean() ?: false
-
-            VideoCallScreen(
-                peerId = peerId,
-                peerName = peerName,
-                isIncoming = isIncoming,
-                onDismiss = { navController.popBackStack() }
-            )
-        }
     }
 }

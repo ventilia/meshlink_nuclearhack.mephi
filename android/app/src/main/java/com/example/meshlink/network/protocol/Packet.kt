@@ -1,6 +1,3 @@
-// ==========================================
-// ФАЙЛ: Packet.kt
-// ==========================================
 package com.example.meshlink.network.protocol
 
 import kotlinx.serialization.Serializable

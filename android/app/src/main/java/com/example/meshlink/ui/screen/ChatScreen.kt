@@ -56,7 +56,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-
 private fun String.isImageFile(): Boolean {
     val lower = this.lowercase()
     return lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
@@ -67,8 +66,8 @@ private fun String.isImageFile(): Boolean {
 fun ChatScreen(
     peerId: String,
     onBack: () -> Unit,
-
-    onVideoCallClick: (peerName: String) -> Unit = {},
+    // ИСПРАВЛЕНО: добавлен флаг isIncoming
+    onVideoCallClick: (peerName: String, isIncoming: Boolean) -> Unit = { _, _ -> },
     viewModel: ChatViewModel = viewModel(factory = ChatViewModelFactory(peerId))
 ) {
     val context = LocalContext.current
@@ -77,7 +76,6 @@ fun ChatScreen(
     val listState = rememberLazyListState()
 
     val contactImageFileName by viewModel.contactImageFileName.collectAsState()
-
     val messages     by viewModel.messages.collectAsState()
     val isRecording  by viewModel.isRecording.collectAsState()
     val incomingCall by viewModel.incomingCall.collectAsState()
@@ -96,9 +94,17 @@ fun ChatScreen(
     var showAliasDialog by remember { mutableStateOf(false) }
     var fullscreenImage by remember { mutableStateOf<File?>(null) }
 
+    // ИСПРАВЛЕНО: Слушаем событие входящего видеозвонка для навигации
+    LaunchedEffect(Unit) {
+        viewModel.incomingVideoCallEvent.collect { senderId ->
+            onVideoCallClick(viewModel.contactName.value ?: senderId.take(8), true)
+        }
+    }
+
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { viewModel.sendFile(peerId, it) }
     }
+
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -108,8 +114,8 @@ fun ChatScreen(
     LaunchedEffect(messages) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
-    LaunchedEffect(peerId) { viewModel.markAllRead(peerId) }
 
+    LaunchedEffect(peerId) { viewModel.markAllRead(peerId) }
 
     if (callActive) {
         ActiveCallScreen(
@@ -146,7 +152,8 @@ fun ChatScreen(
                     callActive           = callActive,
                     onBack               = onBack,
                     onCallClick          = { if (callActive) viewModel.endCall() else viewModel.requestCall() },
-                    onVideoCallClick     = { onVideoCallClick(contactName ?: peerId.take(8)) },
+                    // ИСПРАВЛЕНО: передаем isIncoming = false для исходящего вызова
+                    onVideoCallClick     = { onVideoCallClick(contactName ?: peerId.take(8), false) },
                     onRenameClick        = { showAliasDialog = true }
                 )
             }
@@ -245,7 +252,6 @@ fun ChatScreen(
                     )
                     Spacer(Modifier.height(2.dp))
                 }
-
                 if (messages.isEmpty()) {
                     item {
                         Box(
@@ -337,7 +343,6 @@ private fun ChatTopBar(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-
         Box(
             modifier = Modifier
                 .size(38.dp)
@@ -354,7 +359,6 @@ private fun ChatTopBar(
             )
         }
         Spacer(Modifier.width(10.dp))
-
         ContactAvatarImage(
             displayName   = contactName,
             imageFileName = contactImageFileName,
@@ -363,7 +367,6 @@ private fun ChatTopBar(
             fontSize      = 14.sp
         )
         Spacer(Modifier.width(10.dp))
-
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text       = contactName,
@@ -416,7 +419,6 @@ private fun ChatTopBar(
             )
         }
         Spacer(Modifier.width(4.dp))
-
         if (!callActive) {
             Box(
                 modifier = Modifier
@@ -430,15 +432,14 @@ private fun ChatTopBar(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector        = MeshIcons.VideoOn,
+                    imageVector = MeshIcons.VideoOn,
                     contentDescription = "Видеозвонок",
-                    tint               = if (isOnline) Color(0xFF00E5FF) else PixelTextDim,
-                    modifier           = Modifier.size(20.dp)
+                    tint = if (isOnline) Color(0xFF00E5FF) else PixelTextDim,
+                    modifier = Modifier.size(20.dp)
                 )
             }
             Spacer(Modifier.width(4.dp))
         }
-
         Box(
             modifier = Modifier
                 .size(36.dp)
@@ -466,7 +467,6 @@ private fun ChatTopBar(
         }
     }
 }
-
 
 @Composable
 fun ActiveCallBanner(onEndCall: () -> Unit) {
@@ -508,7 +508,6 @@ fun ActiveCallBanner(onEndCall: () -> Unit) {
     }
 }
 
-
 @Composable
 fun IncomingCallOverlay(
     callerName: String,
@@ -532,7 +531,6 @@ fun IncomingCallOverlay(
         initialValue = 0.5f, targetValue = 0f,
         animationSpec = infiniteRepeatable(tween(1200, delayMillis = 400), RepeatMode.Restart), label = "ring2a"
     )
-
     Box(
         modifier = Modifier.fillMaxSize().background(Color(0xE6060610)),
         contentAlignment = Alignment.Center
@@ -582,14 +580,12 @@ fun IncomingCallOverlay(
     }
 }
 
-
 @Composable
 fun OutgoingCallOverlay(calleeName: String, onCancel: () -> Unit) {
     val infiniteTransition = rememberInfiniteTransition(label = "dots")
     val dotAlpha1 by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "d1")
     val dotAlpha2 by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(600, delayMillis = 200), RepeatMode.Reverse), label = "d2")
     val dotAlpha3 by infiniteTransition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(600, delayMillis = 400), RepeatMode.Reverse), label = "d3")
-
     Box(
         Modifier.fillMaxSize().background(Color(0xE6060610)),
         contentAlignment = Alignment.Center
@@ -631,7 +627,6 @@ fun OutgoingCallOverlay(calleeName: String, onCancel: () -> Unit) {
     }
 }
 
-
 @Composable
 private fun DateDivider(date: String) {
     val today = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date())
@@ -654,7 +649,6 @@ private fun DateDivider(date: String) {
         )
     }
 }
-
 
 @Composable
 fun MessageBubble(
@@ -883,7 +877,6 @@ private fun MessageStateIcon(state: MessageState) {
     )
 }
 
-
 @Composable
 private fun FullscreenImageViewer(file: File, onDismiss: () -> Unit) {
     Dialog(
@@ -908,7 +901,6 @@ private fun FullscreenImageViewer(file: File, onDismiss: () -> Unit) {
     }
 }
 
-
 @Composable
 fun MessageInputBar(
     inputText: String,
@@ -930,8 +922,8 @@ fun MessageInputBar(
         animationSpec = if (isRecording) infiniteRepeatable(tween(400), RepeatMode.Reverse) else tween(200),
         label = "rec_glow"
     )
-
     var recordSeconds by remember { mutableStateOf(0) }
+
     LaunchedEffect(isRecording) {
         if (isRecording) {
             recordSeconds = 0
@@ -959,16 +951,13 @@ fun MessageInputBar(
                 Text("отпустите для отправки", fontFamily = PressStart2PFamily, fontSize = 5.sp, color = PixelTextDim)
             }
         }
-
         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom) {
             Box(
                 modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(PixelMidGray)
                     .clickable { onAttachFile() },
                 contentAlignment = Alignment.Center
             ) { Icon(MeshIcons.Attach, "Прикрепить", tint = PixelTextDim, modifier = Modifier.size(20.dp)) }
-
             Spacer(Modifier.width(8.dp))
-
             TextField(
                 value         = inputText,
                 onValueChange = onTextChange,
@@ -990,9 +979,7 @@ fun MessageInputBar(
                 shape    = RoundedCornerShape(20.dp),
                 maxLines = 4
             )
-
             Spacer(Modifier.width(8.dp))
-
             if (inputText.isNotBlank()) {
                 Box(
                     modifier = Modifier.size(40.dp).clip(CircleShape).background(PixelAccent).clickable { onSendText() },
@@ -1030,7 +1017,6 @@ fun MessageInputBar(
         }
     }
 }
-
 
 @Composable
 private fun AliasDialog(

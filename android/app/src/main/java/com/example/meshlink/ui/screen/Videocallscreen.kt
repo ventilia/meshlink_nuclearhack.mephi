@@ -31,26 +31,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.meshlink.network.CallMetrics
 import com.example.meshlink.network.CallQuality
 import com.example.meshlink.network.VideoMetrics
 import com.example.meshlink.ui.theme.*
 import com.example.meshlink.ui.viewmodel.VideoCallViewModel
 import com.example.meshlink.ui.viewmodel.VideoCallViewModelFactory
 import kotlinx.coroutines.delay
-import org.webrtc.EglBase
 import org.webrtc.SurfaceViewRenderer
 
-/**
- * VideoCallScreen — полноэкранный видеозвонок через WebRTC.
- *
- * Главные изменения:
- * 1. Удалённое видео через SurfaceViewRenderer (не SurfaceView) — нативный WebRTC рендерер.
- * 2. Локальное превью — тоже SurfaceViewRenderer с зеркалом.
- * 3. Метрики качества в реальном времени: RTT, потери, FPS, разрешение.
- * 4. Автоскрытие контролов при активном звонке (UI не мешает видео).
- * 5. Корректные обработчики жизненного цикла (release при onDispose).
- */
 @Composable
 fun VideoCallScreen(
     peerId: String,
@@ -67,7 +55,6 @@ fun VideoCallScreen(
     val isFrontCamera by viewModel.isFrontCamera.collectAsState()
     val isCameraOn by viewModel.isCameraOn.collectAsState()
     val callDuration by viewModel.callDuration.collectAsState()
-
     var controlsVisible by remember { mutableStateOf(true) }
 
     // Запрос разрешений
@@ -80,8 +67,10 @@ fun VideoCallScreen(
     }
 
     LaunchedEffect(Unit) {
-        val missing = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-            .filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        val missing = listOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        ).filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) {
             permissionLauncher.launch(missing.toTypedArray())
         } else {
@@ -103,15 +92,11 @@ fun VideoCallScreen(
             .background(Color.Black)
             .clickable { controlsVisible = !controlsVisible }
     ) {
-
         // ── Удалённое видео (на весь экран) ───────────────────────────────────
         AndroidView(
             factory = { ctx ->
                 SurfaceViewRenderer(ctx).apply {
-                    val egl = EglBase.create()
-                    init(egl.eglBaseContext, null)
-                    setMirror(false)
-                    setEnableHardwareScaler(true)
+                    // ИСПРАВЛЕНО: Убрана двойная инициализация и создание EGL
                     viewModel.attachRemoteRenderer(this)
                 }
             },
@@ -135,7 +120,9 @@ fun VideoCallScreen(
                             .size(96.dp)
                             .clip(CircleShape)
                             .background(
-                                Brush.linearGradient(listOf(Color(0xFF1A3A2A), Color(0xFF0D1117)))
+                                Brush.linearGradient(
+                                    listOf(Color(0xFF1A3A2A), Color(0xFF0D1117))
+                                )
                             )
                             .border(2.dp, PixelAccent.copy(alpha = 0.4f), CircleShape),
                         contentAlignment = Alignment.Center
@@ -168,10 +155,7 @@ fun VideoCallScreen(
                 AndroidView(
                     factory = { ctx ->
                         SurfaceViewRenderer(ctx).apply {
-                            val egl = EglBase.create()
-                            init(egl.eglBaseContext, null)
-                            setMirror(true)   // Зеркало для фронтальной камеры
-                            setEnableHardwareScaler(true)
+                            // ИСПРАВЛЕНО: Убрана двойная инициализация и создание EGL
                             viewModel.attachLocalRenderer(this)
                         }
                     },
@@ -258,7 +242,6 @@ fun VideoCallScreen(
                     .padding(bottom = 32.dp, top = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Верхний ряд: Mute | EndCall | Flip
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -270,8 +253,6 @@ fun VideoCallScreen(
                         background = Color.White.copy(alpha = 0.15f),
                         onClick = { viewModel.toggleMute() }
                     )
-
-                    // Большая красная кнопка завершения
                     Box(
                         modifier = Modifier
                             .size(72.dp)
@@ -286,7 +267,6 @@ fun VideoCallScreen(
                             modifier = Modifier.size(32.dp)
                         )
                     }
-
                     CallControlButton(
                         icon = MeshIcons.FlipCamera,
                         label = "FLIP",
@@ -295,10 +275,7 @@ fun VideoCallScreen(
                         onClick = { viewModel.flipCamera() }
                     )
                 }
-
                 Spacer(Modifier.height(16.dp))
-
-                // Нижний ряд: Camera | (spacer) | Speaker
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -310,9 +287,7 @@ fun VideoCallScreen(
                         background = Color.White.copy(alpha = 0.15f),
                         onClick = { viewModel.toggleCamera() }
                     )
-
-                    Spacer(Modifier.size(52.dp))   // выравнивание под EndCall
-
+                    Spacer(Modifier.size(52.dp))
                     CallControlButton(
                         icon = if (isSpeakerOn) MeshIcons.SpeakerOn else MeshIcons.SpeakerOff,
                         label = if (isSpeakerOn) "SPEAKER" else "EAR",
@@ -327,7 +302,6 @@ fun VideoCallScreen(
 }
 
 // ── Вспомогательные Composable ────────────────────────────────────────────────
-
 @Composable
 private fun CallControlButton(
     icon: ImageVector,
@@ -355,9 +329,9 @@ private fun CallControlButton(
 @Composable
 private fun VideoSignalQualityDot(metrics: VideoMetrics) {
     val color = when (metrics.quality) {
-        com.example.meshlink.network.CallQuality.GOOD -> Color(0xFF00E676)
-        com.example.meshlink.network.CallQuality.FAIR -> Color(0xFFFFB300)
-        com.example.meshlink.network.CallQuality.POOR -> Color(0xFFFF1744)
+        CallQuality.GOOD -> Color(0xFF00E676)
+        CallQuality.FAIR -> Color(0xFFFFB300)
+        CallQuality.POOR -> Color(0xFFFF1744)
     }
     val infiniteTransition = rememberInfiniteTransition(label = "dot")
     val alpha by infiniteTransition.animateFloat(
@@ -417,7 +391,6 @@ private fun VideoIncomingOverlay(
     val ring1Alpha by infiniteTransition.animateFloat(
         0.5f, 0f, infiniteRepeatable(tween(1200), RepeatMode.Restart), "r1a"
     )
-
     Box(
         modifier = Modifier.fillMaxSize().background(Color(0xCC000000)),
         contentAlignment = Alignment.Center
@@ -433,7 +406,6 @@ private fun VideoIncomingOverlay(
                 fontWeight = FontWeight.Medium
             )
             Spacer(Modifier.height(32.dp))
-
             Box(contentAlignment = Alignment.Center) {
                 Box(
                     Modifier.size(120.dp).scale(ring1).alpha(ring1Alpha)
@@ -453,11 +425,9 @@ private fun VideoIncomingOverlay(
                     )
                 }
             }
-
             Spacer(Modifier.height(20.dp))
             Text(callerName, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(48.dp))
-
             Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
@@ -494,7 +464,6 @@ private fun VideoOutgoingOverlay(calleeName: String, onCancel: () -> Unit) {
         infiniteRepeatable(tween(1000, easing = EaseInOutSine), RepeatMode.Reverse),
         "sc"
     )
-
     Box(
         Modifier.fillMaxSize().background(Color(0xCC000000)),
         contentAlignment = Alignment.Center
@@ -536,7 +505,8 @@ private fun VideoOutgoingOverlay(calleeName: String, onCancel: () -> Unit) {
 }
 
 fun formatDuration(seconds: Long): String {
-    val m = seconds / 60; val s = seconds % 60
+    val m = seconds / 60
+    val s = seconds % 60
     return "%02d:%02d".format(m, s)
 }
 

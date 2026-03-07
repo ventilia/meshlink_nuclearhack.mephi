@@ -7,7 +7,6 @@ import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,8 +19,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * │  MeshLink Mesh Network (транспорт сигналинга)           │
  * │   keepalive / TCP / WiFi Direct                         │
  * └──────────────────┬──────────────────────────────────────┘
- *                    │ SDP offer/answer + ICE candidates
- *                    ▼
+ * │ SDP offer/answer + ICE candidates
+ * ▼
  * ┌─────────────────────────────────────────────────────────┐
  * │  WebRtcEngine (этот файл)                              │
  * │  • PeerConnectionFactory (один на приложение)          │
@@ -633,6 +632,13 @@ class WebRtcEngine(private val context: Context) {
         val candidate = json.substringAfter("\"candidate\":\"").substringBefore("\"}")
             .replace("\\n", "\n").replace("\\r", "\r")
         return IceCandidate(sdpMid, sdpMLineIndex, candidate)
+    }
+
+    /**
+     * Предоставляет доступ к общему EGL контексту для рендереров.
+     */
+    fun getEglContext(): EglBase.Context {
+        return eglBase.eglBaseContext
     }
 
     // ── Освобождение ──────────────────────────────────────────────────────────

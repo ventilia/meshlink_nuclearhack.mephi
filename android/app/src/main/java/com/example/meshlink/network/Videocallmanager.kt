@@ -8,7 +8,6 @@ import com.example.meshlink.network.webrtc.WebRtcMetrics
 import com.example.meshlink.network.webrtc.CallQualityLevel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import org.webrtc.EglBase
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
 
@@ -97,9 +96,13 @@ class VideoCallManager(
 
     fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {
         remoteRenderer = renderer
-        renderer.init(EglBase.create().eglBaseContext, null)
+        // ИСПРАВЛЕНО: Используем правильный общий EGL-контекст из движка WebRTC
+        renderer.init(engine.getEglContext(), null)
         renderer.setMirror(false)
         renderer.setEnableHardwareScaler(true)
+
+        // ИСПРАВЛЕНО: Сразу же подключаем трек к рендереру, если он уже есть
+        currentRemoteTrack?.addSink(renderer)
         Log.d(TAG, "Remote renderer attached")
     }
 

@@ -1027,7 +1027,6 @@ class NetworkManager(
         client.sendAckReceived(ip, NetworkMessageAck(messageId, ownPeerId, peerId))
     }
 
-    // ── ИСПРАВЛЕНО: sendCallRequest с явным callType ─────────────────────────
     fun sendCallRequest(peerId: String, callType: CallType = CallType.AUDIO) {
         val ip = peerRegistry.getIp(peerId) ?: run {
             Log.w(TAG, "sendCallRequest: no IP for ${peerId.take(8)}")

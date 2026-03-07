@@ -1,6 +1,4 @@
-// ==========================================
 // ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\ui\viewmodel\Videocallviewmodel.kt
-// ==========================================
 package com.example.meshlink.ui.viewmodel
 
 import android.app.Application
@@ -12,7 +10,6 @@ import com.example.meshlink.MeshLinkApp
 import com.example.meshlink.MeshLinkAppProvider
 import com.example.meshlink.core.MeshLogger
 import com.example.meshlink.domain.model.CallType
-import com.example.meshlink.network.CallManager
 import com.example.meshlink.network.VideoCallManager
 import com.example.meshlink.network.VideoMetrics
 import com.example.meshlink.ui.screen.VideoCallState
@@ -39,7 +36,6 @@ class VideoCallViewModel(
     private val callManager = container.callManager
 
     // ── UI состояние ──────────────────────────────────────────────────────────
-    // ИСПРАВЛЕНО: используем OUTGOING вместо IDLE (IDLE не существует в VideoCallState)
     private val _callState = MutableStateFlow(VideoCallState.OUTGOING)
     val callState: StateFlow<VideoCallState> = _callState
 
@@ -69,12 +65,26 @@ class VideoCallViewModel(
 
     init {
         Log.i(TAG, "VideoCallViewModel created for ${peerId.take(8)}")
+        setupSignalingCallbacks()
         observeCallSignals()
         observeVideoManagerCallbacks()
         observeMetrics()
     }
 
-    // ── Инициализация разрешений ──────────────────────────────────────────────
+    // ── ИСПРАВЛЕНО: Привязка генерации WebRTC сигналов к NetworkManager ──────
+    private fun setupSignalingCallbacks() {
+        videoCallManager?.onSdpGenerated = { id, sdpJson ->
+            if (sdpJson.contains("\"type\":\"offer\"")) {
+                networkManager.sendWebRtcOffer(id, sdpJson, true)
+            } else if (sdpJson.contains("\"type\":\"answer\"")) {
+                networkManager.sendWebRtcAnswer(id, sdpJson)
+            }
+        }
+        videoCallManager?.onIceCandidateGenerated = { id, candidateJson ->
+            networkManager.sendWebRtcIceCandidate(id, candidateJson)
+        }
+    }
+
     fun onPermissionsGranted(isIncoming: Boolean) {
         Log.i(TAG, "Permissions granted, isIncoming=$isIncoming")
         this.isIncoming = isIncoming
@@ -83,11 +93,20 @@ class VideoCallViewModel(
             _callState.value = VideoCallState.INCOMING
         } else {
             _callState.value = VideoCallState.OUTGOING
+            sendVideoCallRequest()
             startOutgoingTimeout()
         }
     }
 
-    // ── Наблюдение сигналинга — ИСПРАВЛЕНО: только VIDEO звонки ─────────────
+    private fun sendVideoCallRequest() {
+        viewModelScope.launch {
+            Log.i(TAG, "Sending VIDEO call request to ${peerId.take(8)}")
+            MeshLogger.звонокИсходящий(peerId)
+            networkManager.sendCallRequest(peerId, CallType.VIDEO)
+        }
+    }
+
+    // ── ИСПРАВЛЕНО: Наблюдение за WebRTC офферами и ответами ─────────────────
     private fun observeCallSignals() {
         // Ответ на исходящий ВИДЕО звонок
         viewModelScope.launch {
@@ -97,7 +116,8 @@ class VideoCallViewModel(
                     Log.i(TAG, "Video callResponse from ${peerId.take(8)}: accepted=${res.accepted}")
                     if (res.accepted) {
                         MeshLogger.звонокПринят(peerId)
-                        startVideoCall()
+                        _callState.value = VideoCallState.ACTIVE
+                        startVideoCall() // Инициатор запускает сессию и генерирует Offer
                     } else {
                         MeshLogger.звонокОтклонён(peerId)
                         _callState.value = VideoCallState.ENDED
@@ -118,13 +138,34 @@ class VideoCallViewModel(
             }
         }
 
-        // WebRTC Offer для входящего видео звонка
+        // Входящий WebRTC Offer
         viewModelScope.launch {
             networkManager.webRtcOffer.collect { offer ->
-                if (offer != null && offer.receiverId == peerId) {
-                    Log.i(TAG, "WebRTC Offer received for video call")
-                    isIncoming = true
-                    _callState.value = VideoCallState.INCOMING
+                if (offer != null && offer.senderId == peerId && offer.callType == CallType.VIDEO) {
+                    Log.i(TAG, "WebRTC Offer received from ${peerId.take(8)}")
+                    if (_callState.value == VideoCallState.ACTIVE || _callState.value == VideoCallState.INCOMING) {
+                        videoCallManager?.handleOffer(peerId, offer.sdpJson)
+                    }
+                }
+            }
+        }
+
+        // Входящий WebRTC Answer
+        viewModelScope.launch {
+            networkManager.webRtcAnswer.collect { answer ->
+                if (answer != null && answer.senderId == peerId && answer.callType == CallType.VIDEO) {
+                    Log.i(TAG, "WebRTC Answer received from ${peerId.take(8)}")
+                    videoCallManager?.handleAnswer(peerId, answer.sdpJson)
+                }
+            }
+        }
+
+        // Входящие ICE кандидаты
+        viewModelScope.launch {
+            networkManager.webRtcIceCandidate.collect { candidate ->
+                if (candidate != null && candidate.senderId == peerId && candidate.callType == CallType.VIDEO) {
+                    Log.v(TAG, "WebRTC ICE received from ${peerId.take(8)}")
+                    videoCallManager?.handleIceCandidate(peerId, candidate.candidateJson)
                 }
             }
         }
@@ -149,13 +190,8 @@ class VideoCallViewModel(
 
     private fun observeMetrics() {
         metricsJob = viewModelScope.launch {
-            val manager = videoCallManager
-            if (manager != null) {
-                manager.metrics.collect { vm ->
-                    _metrics.value = vm
-                }
-            } else {
-                Log.w(TAG, "VideoCallManager not available for metrics")
+            videoCallManager?.metrics?.collect { vm ->
+                _metrics.value = vm
             }
         }
     }
@@ -166,7 +202,7 @@ class VideoCallViewModel(
         MeshLogger.звонокПринят(peerId)
         networkManager.sendCallResponse(peerId, true, CallType.VIDEO)
         _callState.value = VideoCallState.ACTIVE
-        startVideoCall()
+        // ИСПРАВЛЕНО: Принимающая сторона НЕ генерирует оффер. Она ждет WebRtcOffer.
     }
 
     fun rejectCall() {
@@ -192,29 +228,19 @@ class VideoCallViewModel(
         _callState.value = VideoCallState.ENDED
     }
 
-    // ── Инициализация видео звонка через WebRTC ──────────────────────────────
     private fun startVideoCall() {
         MeshLogger.звонокАктивен(peerId)
         Log.i(TAG, "Starting video call session with ${peerId.take(8)}")
 
         val manager = videoCallManager
-        if (manager != null) {
-            val engine = container.webRtcEngine
-            if (engine == null) {
-                Log.e(TAG, "WebRtcEngine not available!")
-                _callState.value = VideoCallState.ENDED
-                return
-            }
-
-            Log.i(TAG, "Using WebRTC for video call")
-            manager.startSession(peerId, null)
-            setSpeakerEnabled(true)
-
+        if (manager != null && container.webRtcEngine != null) {
+            // Только инициатор (Caller) вызывает startSession (генерация оффера)
             if (!isIncoming) {
-                Log.i(TAG, "Initiating WebRTC outgoing call")
+                manager.startSession(peerId, null)
+                setSpeakerEnabled(true)
             }
         } else {
-            Log.e(TAG, "VideoCallManager not available!")
+            Log.e(TAG, "WebRtcEngine not available!")
             _callState.value = VideoCallState.ENDED
         }
     }
@@ -252,11 +278,10 @@ class VideoCallViewModel(
         }
     }
 
-    // ── Управление медиа во время звонка ─────────────────────────────────────
+    // ── Управление медиа ──────────────────────────────────────────────────────
     fun toggleMute() {
         val muted = !_isMuted.value
         _isMuted.value = muted
-        Log.d(TAG, "Mute: $muted")
         videoCallManager?.setMuted(muted)
     }
 
@@ -277,13 +302,11 @@ class VideoCallViewModel(
         val cameraOn = !_isCameraOn.value
         _isCameraOn.value = cameraOn
         videoCallManager?.setCameraEnabled(cameraOn)
-        Log.d(TAG, "Camera: $cameraOn")
     }
 
     fun flipCamera() {
         _isFrontCamera.value = !_isFrontCamera.value
         videoCallManager?.flipCamera()
-        Log.d(TAG, "Camera flipped: front=${_isFrontCamera.value}")
     }
 
     // ── Рендереры ─────────────────────────────────────────────────────────────
@@ -303,10 +326,8 @@ class VideoCallViewModel(
         videoCallManager?.detachRemoteRenderer(renderer)
     }
 
-    // ── Жизненный цикл ────────────────────────────────────────────────────────
     override fun onCleared() {
         super.onCleared()
-        Log.d(TAG, "onCleared for ${peerId.take(8)}")
         durationJob?.cancel()
         metricsJob?.cancel()
         timeoutJob?.cancel()

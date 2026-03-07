@@ -1,4 +1,3 @@
-// ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\ui\MeshLinkApp.kt
 package com.example.meshlink.ui
 
 import androidx.compose.runtime.Composable
@@ -9,7 +8,6 @@ import com.example.meshlink.ui.navigation.Screen
 import com.example.meshlink.ui.screen.ChatListScreen
 import com.example.meshlink.ui.screen.ChatScreen
 import com.example.meshlink.ui.screen.SettingsScreen
-
 
 @Composable
 fun MeshLinkApp() {
@@ -34,9 +32,7 @@ fun MeshLinkApp() {
             val peerId = backStackEntry.arguments?.getString("peerId") ?: return@composable
             ChatScreen(
                 peerId = peerId,
-                onBack = { navController.popBackStack() },
-                // ИСПРАВЛЕНО: Принимаем флаг isIncoming и прокидываем в маршрут
-
+                onBack = { navController.popBackStack() }
             )
         }
 
@@ -45,6 +41,5 @@ fun MeshLinkApp() {
                 onBack = { navController.popBackStack() }
             )
         }
-
     }
 }

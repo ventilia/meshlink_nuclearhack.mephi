@@ -57,7 +57,8 @@ class MainActivity : ComponentActivity() {
 
         app = application as MeshLinkApp
         app.initializeContainer(this)
-        app.notifyServiceContainerReady()
+        // УБРАНО: app.notifyServiceContainerReady() — networkManager здесь ещё null.
+        // GlobalCallManager подключается из WiFiDirectService после nm.start().
 
         NotificationHelper.createChannels(this)
 
@@ -74,14 +75,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume")
-
         AppForegroundTracker.setForeground(true)
     }
 
     override fun onPause() {
         super.onPause()
         Log.d(TAG, "onPause — service keeps running in background")
-
         AppForegroundTracker.setForeground(false)
     }
 
@@ -111,6 +110,7 @@ class MainActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(Manifest.permission.BLUETOOTH_CONNECT)
                 add(Manifest.permission.BLUETOOTH_SCAN)
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
             } else {
                 add(Manifest.permission.BLUETOOTH)
                 add(Manifest.permission.BLUETOOTH_ADMIN)

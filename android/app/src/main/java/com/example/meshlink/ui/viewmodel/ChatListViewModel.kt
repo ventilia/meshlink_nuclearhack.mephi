@@ -19,10 +19,8 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
     private val _connectedDevices = MutableStateFlow<List<NetworkDevice>>(emptyList())
     val connectedDevices: StateFlow<List<NetworkDevice>> = _connectedDevices
 
-    /** true пока идёт pull-to-refresh */
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing
-
 
     private val _deleteConfirmPeerId = MutableStateFlow<String?>(null)
     val deleteConfirmPeerId: StateFlow<String?> = _deleteConfirmPeerId
@@ -53,32 +51,26 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
             container.networkManager.forceRediscover()
-            // Небольшая задержка чтобы UI показал индикатор
             kotlinx.coroutines.delay(1_500)
             _isRefreshing.value = false
         }
     }
 
-
     fun requestDeleteChat(peerId: String) {
         _deleteConfirmPeerId.value = peerId
     }
-
 
     fun cancelDeleteChat() {
         _deleteConfirmPeerId.value = null
     }
 
-
     fun confirmDeleteChat(peerId: String) {
         viewModelScope.launch {
             container.chatRepository.deleteAllMessagesByPeerId(peerId)
-
             container.networkManager.removePeerFromRegistry(peerId)
             _deleteConfirmPeerId.value = null
         }

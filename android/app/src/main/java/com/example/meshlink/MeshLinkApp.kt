@@ -20,6 +20,10 @@ class MeshLinkApp : Application() {
 
     var networkManager: NetworkManager? = null
 
+    val globalCallManager: GlobalCallManager by lazy {
+        GlobalCallManager(this)
+    }
+
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Application started")
@@ -35,8 +39,13 @@ class MeshLinkApp : Application() {
         }
     }
 
-
-
     fun notifyServiceContainerReady() {
+        val nm = networkManager
+        if (nm != null) {
+            globalCallManager.attach(nm)
+            Log.i(TAG, "GlobalCallManager attached to NetworkManager ✓")
+        } else {
+            Log.w(TAG, "notifyServiceContainerReady: networkManager is null!")
+        }
     }
 }

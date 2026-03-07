@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.meshlink.MeshLinkApp
 import com.example.meshlink.core.NativeCore
+import com.example.meshlink.domain.model.NetworkDevice
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -18,11 +19,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         .map { it.username }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
-
     val profileImageFileName: StateFlow<String?> = container.ownProfileRepository
         .getProfileAsFlow()
         .map { it.imageFileName }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val allDevices: StateFlow<Map<String, NetworkDevice>> = container.networkManager.connectedDevices
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    val isBleActive: StateFlow<Boolean> = container.networkManager.isBleActive
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     val peerCount: StateFlow<Int> = container.networkManager.connectedDevices
         .map { it.size }
@@ -61,7 +67,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-
     fun setProfileImage(uri: Uri) {
         viewModelScope.launch {
             val peerId = ownPeerId.value.ifBlank { "own" }
@@ -71,7 +76,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             }
         }
     }
-
 
     fun removeProfileImage() {
         viewModelScope.launch {

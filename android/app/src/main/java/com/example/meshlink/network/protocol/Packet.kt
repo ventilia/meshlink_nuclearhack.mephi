@@ -16,6 +16,15 @@ object PacketType {
     const val CALL_RESPONSE      = 10
     const val CALL_END           = 11
     const val CALL_AUDIO         = 12
+
+
+    const val FILE_INIT          = 100
+    const val FILE_CHUNK         = 101
+    const val FILE_CHUNK_ACK     = 102
+    const val FILE_COMPLETE      = 103
+    const val FILE_STATUS_REQ    = 104
+    const val FILE_STATUS_RESP   = 105
+    const val FILE_CANCEL        = 106
 }
 
 val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

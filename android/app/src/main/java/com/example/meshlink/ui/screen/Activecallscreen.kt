@@ -1,3 +1,10 @@
+// ==========================================
+// ФАЙЛ: ActiveCallScreen.kt
+// ИСПРАВЛЕНИЯ:
+// 1. Упрощена анимация micPulse (без type inference проблем)
+// 2. Добавлены импорт для animateFloatAsState
+// 3. Убраны сложные вложенные animationSpec
+// ==========================================
 package com.example.meshlink.ui.screen
 
 import androidx.compose.animation.core.*
@@ -38,25 +45,46 @@ fun ActiveCallScreen(
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "active_call")
 
+    // Волны вокруг аватара — без изменений
     val waveScale1 by infiniteTransition.animateFloat(
-        1f, 1.3f,
-        infiniteRepeatable(tween(1400, easing = EaseInOutCubic), RepeatMode.Reverse),
-        label = "w1"
+        initialValue = 1f, targetValue = 1.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = EaseInOutCubic),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wave_scale_1"
     )
     val waveScale2 by infiniteTransition.animateFloat(
-        1f, 1.6f,
-        infiniteRepeatable(tween(1800, delayMillis = 200, easing = EaseInOutCubic), RepeatMode.Reverse),
-        label = "w2"
+        initialValue = 1f, targetValue = 1.6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1800, delayMillis = 200, easing = EaseInOutCubic),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wave_scale_2"
     )
     val waveAlpha1 by infiniteTransition.animateFloat(
-        0.35f, 0f,
-        infiniteRepeatable(tween(1400), RepeatMode.Reverse),
-        label = "wa1"
+        initialValue = 0.35f, targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wave_alpha_1"
     )
     val waveAlpha2 by infiniteTransition.animateFloat(
-        0.2f, 0f,
-        infiniteRepeatable(tween(1800, delayMillis = 200), RepeatMode.Reverse),
-        label = "wa2"
+        initialValue = 0.2f, targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1800, delayMillis = 200),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wave_alpha_2"
+    )
+
+    // 🔧 FIX: micPulse — простая анимация без type inference проблем
+    // Используем animateFloatAsState вместо сложного infiniteRepeatable с условием
+    val micPulse by animateFloatAsState(
+        targetValue = if (isMuted) 1f else 1.05f,
+        animationSpec = tween(durationMillis = 400, easing = LinearEasing),
+        label = "mic_pulse_simple"
     )
 
     Box(
@@ -71,11 +99,12 @@ fun ActiveCallScreen(
                 .fillMaxSize()
                 .padding(horizontal = 32.dp)
         ) {
+            // ── Заголовок ──────────────────────────────────────────────────
             Spacer(Modifier.height(56.dp))
-
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(8.dp)
+                    Modifier
+                        .size(8.dp)
                         .alpha(animateFloat(infiniteTransition, 0.5f, 1f, 800))
                         .background(PixelAccent, CircleShape)
                 )
@@ -95,19 +124,28 @@ fun ActiveCallScreen(
                 fontSize = 14.sp
             )
 
+            // ── Центральная область ───────────────────────────────────────
             Spacer(Modifier.weight(1f))
 
             Box(contentAlignment = Alignment.Center) {
                 Box(
-                    Modifier.size(160.dp).scale(waveScale2).alpha(waveAlpha2)
+                    Modifier
+                        .size(160.dp)
+                        .scale(waveScale2)
+                        .alpha(waveAlpha2)
                         .background(PixelAccent.copy(0.15f), CircleShape)
                 )
                 Box(
-                    Modifier.size(130.dp).scale(waveScale1).alpha(waveAlpha1)
+                    Modifier
+                        .size(130.dp)
+                        .scale(waveScale1)
+                        .alpha(waveAlpha1)
                         .background(PixelAccent.copy(0.25f), CircleShape)
                 )
                 Box(
-                    Modifier.size(96.dp).clip(CircleShape)
+                    Modifier
+                        .size(96.dp)
+                        .clip(CircleShape)
                         .background(
                             Brush.linearGradient(listOf(Color(0xFF1A3A2A), Color(0xFF0D1A10)))
                         )
@@ -129,30 +167,35 @@ fun ActiveCallScreen(
             Text("зашифрованный mesh-звонок", color = Color.White.copy(0.4f), fontSize = 11.sp)
             Spacer(Modifier.height(24.dp))
 
-            // Метрики качества
+            // ── Карточка качества ─────────────────────────────────────────
             CallQualityCard(metrics)
 
             Spacer(Modifier.weight(1f))
 
+            // ── Кнопки управления ─────────────────────────────────────────
             Row(
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(bottom = 16.dp)
             ) {
+                // Кнопка Mute — с micPulse анимацией
                 CallActionButton(
                     icon = if (isMuted) MeshIcons.MicOff else MeshIcons.Microphone,
                     label = if (isMuted) "АНМУТ" else "МУТ",
                     isActive = isMuted,
                     activeColor = PixelWarn,
+                    pulseScale = micPulse,  // 🔧 Применяем упрощённую анимацию
                     onClick = onToggleMute
                 )
 
+                // Кнопка завершения
                 Box(
                     modifier = Modifier
                         .size(72.dp)
                         .clip(CircleShape)
                         .background(PixelWarn)
-                        .clickable { onEndCall() },
+                        .clickable { onEndCall() }
+                        .border(2.dp, Color.White.copy(0.3f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -162,6 +205,7 @@ fun ActiveCallScreen(
                     )
                 }
 
+                // Кнопка Speaker
                 CallActionButton(
                     icon = if (isSpeakerOn) MeshIcons.SpeakerOn else MeshIcons.SpeakerOff,
                     label = if (isSpeakerOn) "ГРОМ." else "ТРУБКА",
@@ -182,12 +226,14 @@ private fun CallActionButton(
     label: String,
     isActive: Boolean,
     activeColor: Color,
+    pulseScale: Float = 1f,  // 🔧 Новый параметр для анимации
     onClick: () -> Unit
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
                 .size(56.dp)
+                .scale(pulseScale)  // 🔧 Применяем pulseScale
                 .clip(CircleShape)
                 .background(
                     if (isActive) activeColor.copy(alpha = 0.2f)
@@ -238,19 +284,23 @@ private fun CallQualityCard(metrics: CallMetrics) {
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Индикатор качества
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Box(
-                Modifier.size(8.dp)
+                Modifier
+                    .size(8.dp)
                     .background(qualityColor, CircleShape)
             )
             Spacer(Modifier.height(4.dp))
             Text(qualityText, color = qualityColor, fontSize = 7.sp, fontWeight = FontWeight.Bold)
         }
 
+        // RTT
         if (metrics.rttMs >= 0) {
-            MetricItem("RTT", "${metrics.rttMs}мс")
+            MetricItem("RTT", "${metrics.rttMs}мс", warn = metrics.rttMs > 200)
         }
 
+        // Потери
         if (metrics.lossRatePercent > 0.1f) {
             MetricItem(
                 "ПОТЕРИ",
@@ -259,8 +309,9 @@ private fun CallQualityCard(metrics: CallMetrics) {
             )
         }
 
+        // Jitter
         if (metrics.jitterMs > 10) {
-            MetricItem("JITTER", "${metrics.jitterMs}мс")
+            MetricItem("JITTER", "${metrics.jitterMs}мс", warn = metrics.jitterMs > 50)
         }
     }
 }
@@ -268,7 +319,12 @@ private fun CallQualityCard(metrics: CallMetrics) {
 @Composable
 private fun MetricItem(label: String, value: String, warn: Boolean = false) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, color = if (warn) PixelWarn else Color.White.copy(0.9f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Text(
+            value,
+            color = if (warn) PixelWarn else Color.White.copy(0.9f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
+        )
         Text(label, color = Color.White.copy(0.4f), fontSize = 6.sp)
     }
 }
@@ -281,8 +337,11 @@ private fun animateFloat(
     durationMs: Int
 ): Float {
     val value by transition.animateFloat(
-        from, to,
-        infiniteRepeatable(tween(durationMs), RepeatMode.Reverse),
+        initialValue = from, targetValue = to,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMs),
+            repeatMode = RepeatMode.Reverse
+        ),
         label = "float_$durationMs"
     )
     return value

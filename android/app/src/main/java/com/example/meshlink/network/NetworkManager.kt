@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.Base64
 import android.util.Log
 import com.example.meshlink.AppForegroundTracker
 import com.example.meshlink.core.NativeCore
@@ -51,24 +52,26 @@ class NetworkManager(
         private const val PREFS_NAME = "meshlink_peers"
         private const val PREFS_KEY_KNOWN_IPS = "known_ips"
         private const val MAX_KNOWN_IPS = 20
+
+        // Chunked file transfer packet types
+        const val PACKET_FILE_INIT = 100
+        const val PACKET_FILE_CHUNK = 101
+        const val PACKET_FILE_CHUNK_ACK = 102
+        const val PACKET_FILE_RETRY = 103
+        const val PACKET_FILE_COMPLETE = 104
+        const val PACKET_FILE_STATUS_REQ = 105
+        const val PACKET_FILE_STATUS_RESP = 106
+        const val PACKET_FILE_CANCEL = 107
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    @Volatile
-    var ownPeerId: String = ""
+    @Volatile var ownPeerId: String = ""
         private set
-
-    @Volatile
-    private var ownUsername: String = ""
-
-    @Volatile
-    private var ownIpAddress: String? = null
-
-    @Volatile
-    private var started = false
+    @Volatile private var ownUsername: String = ""
+    @Volatile private var ownIpAddress: String? = null
+    @Volatile private var started = false
 
     private val identityReady = CompletableDeferred<Unit>()
     private val _ownPeerIdFlow = MutableStateFlow("")
@@ -77,7 +80,7 @@ class NetworkManager(
     private val server = MeshServer(TCP_PORT)
     private val client = MeshClient(TCP_PORT)
 
-    private val bluetoothTransport = BluetoothTransport(context) { type, payload, sender ->
+    private val bluetoothTransport = BluetoothTransport(context) { type: Int, payload: ByteArray, sender: String ->
         dispatchIncomingPacket(type, payload, sender)
     }
 
@@ -91,33 +94,35 @@ class NetworkManager(
     private val profileRequestInFlight = mutableSetOf<String>()
     private val profileLock = Any()
 
-    // ── Call Signaling Flows ─────────────────────────────────────────────────
+    // Call Signaling Flows
     private val _callRequest = MutableStateFlow<NetworkCallRequest?>(null)
     val callRequest: StateFlow<NetworkCallRequest?> = _callRequest
-
     private val _callResponse = MutableStateFlow<NetworkCallResponse?>(null)
     val callResponse: StateFlow<NetworkCallResponse?> = _callResponse
-
     private val _callEnd = MutableStateFlow<NetworkCallEnd?>(null)
     val callEnd: StateFlow<NetworkCallEnd?> = _callEnd
-
     private val _callFragment = MutableStateFlow<ByteArray?>(null)
     val callFragment: StateFlow<ByteArray?> = _callFragment
 
-
+    // File transfer state
+    private val activeTransfers = mutableMapOf<String, FileTransferState>()
+    private val transferLock = Any()
 
     fun start() {
         if (started) return
         started = true
         Log.i(TAG, "NetworkManager STARTING")
+
         setupServerHandlers()
         server.start()
         udpDiscovery.start()
         peerRegistry.start()
+
         if (bluetoothTransport.isAvailable()) {
             bluetoothTransport.startServer()
             Log.i(TAG, "Bluetooth transport started")
         }
+
         scope.launch {
             initIdentity()
             val initialIp = getLanIp()
@@ -143,10 +148,11 @@ class NetworkManager(
             ownUsername = profile.username.ifBlank { Build.MODEL }
             val filesDir = context.filesDir.absolutePath
             val androidId = Settings.Secure.getString(
-                context.contentResolver,
-                Settings.Secure.ANDROID_ID
+                context.contentResolver, Settings.Secure.ANDROID_ID
             ) ?: ""
+
             ensureIdentityIsUnique(filesDir, androidId)
+
             val deviceSeed = if (androidId.isNotBlank()) {
                 "${ownUsername}_${androidId}"
             } else {
@@ -157,11 +163,13 @@ class NetworkManager(
                 }
                 "${ownUsername}_${salt}"
             }
+
             val coreInitialized = NativeCore.initWithFilesDir(filesDir, deviceSeed)
             if (coreInitialized) {
                 val rustPeerId = NativeCore.getOwnPeerIdHex()
                 val rustShortCode = NativeCore.getOwnShortCode()
                 val rustPubKey = NativeCore.getOwnPublicKeyHex()
+
                 if (rustPeerId.isNotBlank()) {
                     ownPeerId = rustPeerId
                     ownAccountRepository.setPeerId(ownPeerId)
@@ -220,29 +228,37 @@ class NetworkManager(
         )
     }
 
-
+    // ──────────────────────────────────────────────────────────────────────
+    // SERVER HANDLERS SETUP
+    // ──────────────────────────────────────────────────────────────────────
     private fun setupServerHandlers() {
-        server.onKeepalive = { keepalive, senderIp ->
+        server.onKeepalive = { keepalive: NetworkKeepalive, senderIp: String ->
             scope.launch {
                 identityReady.await()
                 handleKeepalive(keepalive, senderIp)
             }
         }
-        server.onProfileRequest = { req, senderIp ->
+        server.onProfileRequest = { req: NetworkProfileRequest, senderIp: String ->
             scope.launch {
                 identityReady.await()
                 if (req.senderId.isNotBlank()) handleProfileRequest(req, senderIp)
             }
         }
-        server.onProfileResponse = { res -> handleProfileResponse(res) }
-        server.onTextMessage = { msg -> handleTextMessage(msg) }
-        server.onFileMessage = { msg -> handleFileMessage(msg) }
-        server.onAudioMessage = { msg -> handleAudioMessage(msg) }
-        server.onAckReceived = { ack -> handleAckReceived(ack) }
-        server.onAckRead = { ack -> handleAckRead(ack) }
+        server.onProfileResponse = { res: NetworkProfileResponse -> handleProfileResponse(res) }
+        server.onTextMessage = { msg: NetworkTextMessage -> handleTextMessage(msg) }
+        server.onFileMessage = { msg: NetworkFileMessage -> handleFileMessage(msg) }
+        server.onAudioMessage = { msg: NetworkAudioMessage -> handleAudioMessage(msg) }
+        server.onAckReceived = { ack: NetworkMessageAck -> handleAckReceived(ack) }
+        server.onAckRead = { ack: NetworkMessageAck -> handleAckRead(ack) }
 
-        // ── Call Signaling ─────────────────────────────────────────────────
-        server.onCallRequest = { req ->
+        // Chunked file transfer handlers
+        server.onFileInit = { msg: NetworkFileInit -> handleFileInit(msg) }
+        server.onFileChunk = { msg: NetworkFileChunk, senderIp: String -> handleFileChunk(msg, senderIp) }
+        server.onFileChunkAck = { msg: NetworkFileChunkAck -> handleFileChunkAck(msg) }
+        server.onFileComplete = { msg: NetworkFileComplete -> handleFileComplete(msg) }
+
+        // Call Signaling
+        server.onCallRequest = { req: NetworkCallRequest ->
             _callRequest.value = req
             if (!AppForegroundTracker.isInForeground()) {
                 scope.launch {
@@ -253,15 +269,17 @@ class NetworkManager(
                 }
             }
         }
-        server.onCallResponse = { res -> _callResponse.value = res }
-        server.onCallEnd = { end ->
+        server.onCallResponse = { res: NetworkCallResponse -> _callResponse.value = res }
+        server.onCallEnd = { end: NetworkCallEnd ->
             _callEnd.value = end
             NotificationHelper.dismissCallNotification(context)
         }
-        server.onCallAudio = { bytes, _ -> _callFragment.value = bytes }
+        server.onCallAudio = { bytes: ByteArray, _: String -> _callFragment.value = bytes }
     }
 
-
+    // ──────────────────────────────────────────────────────────────────────
+    // PACKET DISPATCH (Bluetooth fallback)
+    // ──────────────────────────────────────────────────────────────────────
     private fun dispatchIncomingPacket(type: Int, payload: ByteArray, senderAddress: String) {
         try {
             when (type) {
@@ -300,6 +318,22 @@ class NetworkManager(
                     NotificationHelper.dismissCallNotification(context)
                 }
                 PacketType.CALL_AUDIO -> _callFragment.value = payload
+
+                // Chunked file transfer over Bluetooth
+                PACKET_FILE_INIT -> handleFileInit(
+                    json.decodeFromString<NetworkFileInit>(payload.decodeToString())
+                )
+                PACKET_FILE_CHUNK -> handleFileChunk(
+                    json.decodeFromString<NetworkFileChunk>(payload.decodeToString()),
+                    senderAddress
+                )
+                PACKET_FILE_CHUNK_ACK -> handleFileChunkAck(
+                    json.decodeFromString<NetworkFileChunkAck>(payload.decodeToString())
+                )
+                PACKET_FILE_COMPLETE -> handleFileComplete(
+                    json.decodeFromString<NetworkFileComplete>(payload.decodeToString())
+                )
+
                 PacketType.ACK_RECEIVED -> handleAckReceived(
                     json.decodeFromString<NetworkMessageAck>(payload.decodeToString())
                 )
@@ -313,219 +347,223 @@ class NetworkManager(
         }
     }
 
-    private fun saveKnownIp(ip: String) {
-        if (ip.isBlank()) return
-        val current = prefs.getStringSet(PREFS_KEY_KNOWN_IPS, mutableSetOf()) ?: mutableSetOf()
-        val updated = (current + ip).take(MAX_KNOWN_IPS).toMutableSet()
-        prefs.edit().putStringSet(PREFS_KEY_KNOWN_IPS, updated).apply()
-    }
+    // ──────────────────────────────────────────────────────────────────────
+    // CHUNKED FILE TRANSFER — INCOMING
+    // ──────────────────────────────────────────────────────────────────────
 
-    private fun getKnownIps(): Set<String> =
-        prefs.getStringSet(PREFS_KEY_KNOWN_IPS, emptySet()) ?: emptySet()
-
-    private fun removeKnownIp(ip: String) {
-        val current = prefs.getStringSet(PREFS_KEY_KNOWN_IPS, mutableSetOf()) ?: mutableSetOf()
-        prefs.edit().putStringSet(PREFS_KEY_KNOWN_IPS, (current - ip).toMutableSet()).apply()
-    }
-
-    private suspend fun reconnectKnownPeers() {
-        val knownIps = getKnownIps()
-        if (knownIps.isEmpty()) return
-        Log.i(TAG, "Reconnecting to ${knownIps.size} known peer(s)")
-        for (ip in knownIps) {
-            udpDiscovery.sendDirectAnnounce(ip)
-        }
-    }
-
-
-
-
-
-
-
-
-
-    // ── Остальные методы NetworkManager (без изменений) ─────────────────────
-    private fun getCurrentOwnIp(): String? {
-        if (receiver.isGroupOwner.value) return WiFiDirectBroadcastReceiver.GROUP_OWNER_IP
-        return getP2pClientIp() ?: getLanIp()
-    }
-
-    private fun getP2pClientIp(): String? = try {
-        NetworkInterface.getNetworkInterfaces()?.toList()
-            ?.filter { it.isUp && !it.isLoopback }
-            ?.flatMap { it.inetAddresses.toList() }
-            ?.filterIsInstance<Inet4Address>()
-            ?.map { it.hostAddress ?: "" }
-            ?.firstOrNull { it.startsWith("192.168.49.") && it != WiFiDirectBroadcastReceiver.GROUP_OWNER_IP }
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun getLanIp(): String? = try {
-        NetworkInterface.getNetworkInterfaces()?.toList()
-            ?.filter { it.isUp && !it.isLoopback && !it.isVirtual }
-            ?.flatMap { it.inetAddresses.toList() }
-            ?.filterIsInstance<Inet4Address>()
-            ?.map { it.hostAddress ?: "" }
-            ?.firstOrNull { !it.startsWith("127.") && !it.startsWith("169.254.") && !it.startsWith("192.168.49.") }
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun getAllOwnIps(): List<String> {
-        val ips = mutableListOf<String>()
-        if (receiver.isGroupOwner.value) ips.add(WiFiDirectBroadcastReceiver.GROUP_OWNER_IP)
-        getP2pClientIp()?.let { ips.add(it) }
-        getLanIp()?.let { if (it !in ips) ips.add(it) }
-        return ips
-    }
-
-    private fun observeUdpPeers() {
-        scope.launch {
-            Log.d(TAG, "[UDP] observeUdpPeers started, ownPeerId=${ownPeerId.take(8)}")
-            udpDiscovery.peers.collect { udpPeers ->
-                val myId = ownPeerId
-                for ((peerId, discovered) in udpPeers) {
-                    if (myId.isNotBlank() && peerId == myId) continue
-                    if (peerId.isBlank()) continue
-                    val device = NetworkDevice(
-                        peerId = peerId,
-                        username = discovered.announce.username,
-                        shortCode = discovered.announce.shortCode,
-                        publicKeyHex = discovered.announce.publicKeyHex,
-                        ipAddress = discovered.ip,
-                        keepalive = System.currentTimeMillis(),
-                        hopCount = 1
-                    )
-                    peerRegistry.upsert(device, "udp")
-                    saveKnownIp(discovered.ip)
-                    scope.launch { requestProfileIfNeeded(peerId, discovered.ip) }
+    private fun handleFileInit(msg: NetworkFileInit) {
+        if (msg.receiverId != ownPeerId && msg.receiverId.isNotBlank()) {
+            // Mesh forwarding
+            if (msg.ttl > 0) {
+                scope.launch {
+                    val forwarded = msg.copy(ttl = msg.ttl - 1)
+                    val payload = json.encodeToString(NetworkFileInit.serializer(), forwarded).encodeToByteArray()
+                    sendPacket(msg.receiverId, PACKET_FILE_INIT, payload, "forward-file-init")
                 }
+            }
+            return
+        }
+
+        scope.launch {
+            Log.i(TAG, "[FILE] Init: '${msg.fileName}' ${msg.fileSize}B, ${msg.totalChunks} chunks from ${msg.senderId.take(8)}")
+
+            // Save transfer metadata
+            val transferKey = "transfer_in_${msg.transferId}"
+            prefs.edit()
+                .putString("${transferKey}_meta", json.encodeToString(msg))
+                .putLong("${transferKey}_started", System.currentTimeMillis())
+                .putInt("${transferKey}_total", msg.totalChunks)
+                .putString("${transferKey}_hash", msg.fileHash)
+                .apply()
+
+            // Send status response to sender
+            val senderIp = peerRegistry.getIp(msg.senderId)
+            if (senderIp != null) {
+                val status = NetworkFileStatusResponse(
+                    transferId = msg.transferId,
+                    totalChunks = msg.totalChunks,
+                    receivedChunks = emptyList(),
+                    canResume = false
+                )
+                val payload = json.encodeToString(NetworkFileStatusResponse.serializer(), status).encodeToByteArray()
+                client.sendRaw(senderIp, PACKET_FILE_STATUS_RESP, payload)
             }
         }
     }
 
-    private fun observeWifiDirectGroup() {
+    private fun handleFileChunk(msg: NetworkFileChunk, senderIp: String) {
         scope.launch {
-            combine(receiver.isGroupOwner, receiver.groupOwnerAddress) { isOwner, ownerIp ->
-                Pair(isOwner, ownerIp)
-            }.collectLatest { (isOwner, ownerIp) ->
-                val newIp = if (isOwner) WiFiDirectBroadcastReceiver.GROUP_OWNER_IP
-                else getP2pClientIp() ?: getLanIp()
-                if (newIp != null && newIp != ownIpAddress) {
-                    ownIpAddress = newIp
-                    Log.i(TAG, "[P2P] Own IP: $newIp (isOwner=$isOwner)")
-                    udpDiscovery.updateOwnIp(newIp)
-                    udpDiscovery.updateOwnIdentity(
-                        peerId = ownPeerId,
-                        username = ownUsername,
-                        shortCode = if (NativeCore.isInitialized()) NativeCore.getOwnShortCode() else ownPeerId.take(4).uppercase(),
-                        publicKeyHex = if (NativeCore.isInitialized()) NativeCore.getOwnPublicKeyHex() else ""
+            identityReady.await()
+
+            val transferKey = "transfer_in_${msg.transferId}"
+            val metaJson = prefs.getString("${transferKey}_meta", null)
+            if (metaJson == null) {
+                Log.w(TAG, "[FILE] Chunk received for unknown transfer: ${msg.transferId}")
+                sendChunkAck(msg.transferId, msg.chunkIndex, "", false, senderIp)
+                return@launch
+            }
+
+            val meta = try {
+                json.decodeFromString<NetworkFileInit>(metaJson)
+            } catch (e: Exception) {
+                Log.e(TAG, "[FILE] Failed to parse transfer meta: ${e.message}")
+                return@launch
+            }
+
+            // Decode and verify chunk
+            val chunkData = try {
+                Base64.decode(msg.data, Base64.NO_WRAP)
+            } catch (e: Exception) {
+                Log.w(TAG, "[FILE] Base64 decode failed for chunk ${msg.chunkIndex}")
+                sendChunkAck(msg.transferId, msg.chunkIndex, "", false, senderIp)
+                return@launch
+            }
+
+            val actualHash = FileManager.computeSha256(chunkData)
+            if (actualHash != msg.chunkHash) {
+                Log.w(TAG, "[FILE] Chunk ${msg.chunkIndex} hash mismatch! expected=${msg.chunkHash.take(8)} got=${actualHash.take(8)}")
+                sendChunkAck(msg.transferId, msg.chunkIndex, actualHash, false, senderIp)
+                return@launch
+            }
+
+            // Save chunk via FileManager
+            val saved = fileManager.saveChunkForAssembly(
+                transferId = msg.transferId,
+                chunkIndex = msg.chunkIndex,
+                chunkData = chunkData,
+                expectedHash = msg.chunkHash
+            )
+
+            if (saved) {
+                // Update progress
+                val received = prefs.getStringSet("${transferKey}_received", emptySet())?.toMutableSet() ?: mutableSetOf()
+                received.add(msg.chunkIndex.toString())
+                prefs.edit().putStringSet("${transferKey}_received", received).apply()
+
+                Log.d(TAG, "[FILE] Chunk ${msg.chunkIndex}/${msg.totalChunks} saved ✓")
+                sendChunkAck(msg.transferId, msg.chunkIndex, actualHash, true, senderIp)
+
+                // Check if transfer is complete
+                if (received.size == meta.totalChunks) {
+                    Log.i(TAG, "[FILE] All chunks received, assembling...")
+                    val outputFile = fileManager.assembleFile(
+                        transferId = msg.transferId,
+                        outputFileName = meta.fileName,
+                        expectedFileHash = meta.fileHash
                     )
-                }
-                if (!isOwner && ownerIp != null && ownerIp != ownIpAddress) {
-                    Log.i(TAG, "[P2P] Connected to GO @ $ownerIp — sending direct announce (x3)")
-                    saveKnownIp(ownerIp)
-                    udpDiscovery.sendDirectAnnounce(ownerIp)
-                    scope.launch {
-                        delay(1_000)
-                        udpDiscovery.sendDirectAnnounce(ownerIp)
-                        delay(2_000)
-                        udpDiscovery.sendDirectAnnounce(ownerIp)
+
+                    val success = outputFile?.exists() == true
+                    val finalHash = if (success && outputFile != null) {
+                        FileManager.computeSha256(outputFile.readBytes())
+                    } else {
+                        null
                     }
+
+                    // Notify sender
+                    val complete = NetworkFileComplete(
+                        transferId = msg.transferId,
+                        senderId = ownPeerId,
+                        receiverId = meta.senderId,
+                        success = success,
+                        error = if (!success) "Assembly failed" else null,
+                        finalHash = finalHash
+                    )
+                    val payload = json.encodeToString(NetworkFileComplete.serializer(), complete).encodeToByteArray()
+                    client.sendRaw(senderIp, PACKET_FILE_COMPLETE, payload)
+
+                    if (success) {
+                        // Add to chat
+                        val fileName = outputFile?.name ?: meta.fileName
+                        chatRepository.addMessage(
+                            FileMessage(
+                                messageId = System.currentTimeMillis(),
+                                senderId = meta.senderId,
+                                receiverId = ownPeerId,
+                                timestamp = meta.timestamp,
+                                messageState = MessageState.MESSAGE_RECEIVED,
+                                fileName = fileName
+                            )
+                        )
+                        contactRepository.addOrUpdateAccount(Account(meta.senderId, System.currentTimeMillis()))
+
+                        if (!AppForegroundTracker.isInForeground()) {
+                            val contact = contactRepository.getAllContactsAsFlow().first()
+                                .find { it.peerId == meta.senderId }
+                            val senderName = contact?.username ?: meta.senderId.take(8).uppercase()
+                            NotificationHelper.showMessageNotification(
+                                context = context,
+                                senderName = senderName,
+                                text = "[файл] ${meta.fileName}",
+                                peerId = meta.senderId
+                            )
+                        }
+                    }
+
+                    // Cleanup
+                    prefs.edit()
+                        .remove("${transferKey}_meta")
+                        .remove("${transferKey}_received")
+                        .remove("${transferKey}_started")
+                        .remove("${transferKey}_hash")
+                        .apply()
+                    fileManager.cleanupTransferChunks(msg.transferId)
                 }
+            } else {
+                Log.e(TAG, "[FILE] Failed to save chunk ${msg.chunkIndex}")
+                sendChunkAck(msg.transferId, msg.chunkIndex, actualHash, false, senderIp)
             }
         }
     }
 
-    private fun startPeriodicRediscovery() {
+    private suspend fun sendChunkAck(
+        transferId: String,
+        chunkIndex: Int,
+        receivedHash: String,
+        success: Boolean,
+        senderIp: String
+    ) {
+        val ack = NetworkFileChunkAck(
+            transferId = transferId,
+            chunkIndex = chunkIndex,
+            receivedHash = receivedHash,
+            success = success
+        )
+        val payload = json.encodeToString(NetworkFileChunkAck.serializer(), ack).encodeToByteArray()
+        client.sendRaw(senderIp, PACKET_FILE_CHUNK_ACK, payload)
+    }
+
+    private fun handleFileChunkAck(msg: NetworkFileChunkAck) {
         scope.launch {
-            while (isActive) {
-                delay(60_000)
-                val ownIp = getCurrentOwnIp()
-                if (ownIp != null) udpDiscovery.updateOwnIp(ownIp)
-                receiver.discoverPeers()
-                val allKnownIps = getKnownIps()
-                for (ip in allKnownIps) {
-                    udpDiscovery.sendDirectAnnounce(ip)
-                }
+            if (!msg.success) {
+                Log.w(TAG, "[FILE] Chunk ${msg.chunkIndex} NACK, hash=${msg.receivedHash.take(8)}")
+                // TODO: Implement retry logic
+            } else {
+                Log.d(TAG, "[FILE] Chunk ${msg.chunkIndex} ACK ✓")
+                // Update UI progress if needed
             }
         }
     }
 
-    fun forceRediscover() {
+    private fun handleFileComplete(msg: NetworkFileComplete) {
         scope.launch {
-            Log.i(TAG, "Force rediscover triggered")
-            receiver.discoverPeers()
-            getCurrentOwnIp()?.let { udpDiscovery.updateOwnIp(it) }
-            val allIps = (getKnownIps() + peerRegistry.peers.value.values.mapNotNull { it.ipAddress })
-                .filter { it.isNotBlank() }.toSet()
-            for (ip in allIps) udpDiscovery.sendDirectAnnounce(ip)
+            if (msg.success) {
+                Log.i(TAG, "[FILE] Transfer ${msg.transferId.take(8)} completed successfully")
+            } else {
+                Log.w(TAG, "[FILE] Transfer ${msg.transferId.take(8)} failed: ${msg.error}")
+            }
+            // Cleanup outgoing transfer state
+            fileManager.cleanupTransferChunks(msg.transferId)
         }
     }
 
-    private fun startKeepaliveLoop() {
-        scope.launch {
-            delay(1_000)
-            while (isActive) {
-                sendKeepalive()
-                delay(KEEPALIVE_INTERVAL_MS)
-            }
-        }
-    }
-
-    private suspend fun sendKeepalive() {
-        if (ownPeerId.isBlank()) return
-        try {
-            val currentIp = getCurrentOwnIp()
-            if (currentIp != null) {
-                ownIpAddress = currentIp
-                udpDiscovery.updateOwnIp(currentIp)
-            }
-            val profile = ownProfileRepository.getProfile()
-            val username = profile.username.ifBlank { ownUsername }
-            val ownDevice = NetworkDevice(
-                peerId = ownPeerId,
-                username = username,
-                shortCode = if (NativeCore.isInitialized()) NativeCore.getOwnShortCode() else ownPeerId.take(4).uppercase(),
-                publicKeyHex = if (NativeCore.isInitialized()) NativeCore.getOwnPublicKeyHex() else "",
-                ipAddress = currentIp,
-                keepalive = System.currentTimeMillis(),
-                hopCount = 1
-            )
-            val knownPeers = peerRegistry.peers.value.values
-                .filter { it.shortCode.isNotBlank() && it.peerId != ownPeerId }
-            val routingTableJson =
-                if (NativeCore.isInitialized()) NativeCore.getRoutingTableJson() else null
-            val keepalive = NetworkKeepalive(
-                devices = listOf(ownDevice) + knownPeers,
-                senderPeerId = ownPeerId,
-                routingTableJson = routingTableJson
-            )
-            val targets = buildSet<String> {
-                if (!receiver.isGroupOwner.value) {
-                    add(WiFiDirectBroadcastReceiver.GROUP_OWNER_IP)
-                }
-                receiver.groupOwnerAddress.value?.let { if (it != currentIp) add(it) }
-                knownPeers.mapNotNull { it.ipAddress }.forEach { add(it) }
-            }.filter { it != currentIp && it.isNotBlank() }
-            for (ip in targets) {
-                val localIp = client.sendKeepaliveReturnLocalIp(ip, keepalive)
-                if (localIp != null && localIp != currentIp && localIp != "0.0.0.0") {
-                    ownIpAddress = localIp
-                    udpDiscovery.updateOwnIp(localIp)
-                }
-                saveKnownIp(ip)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "sendKeepalive error: ${e.message}")
-        }
-    }
+    // ──────────────────────────────────────────────────────────────────────
+    // EXISTING MESSAGE HANDLERS (unchanged except for mesh forwarding)
+    // ──────────────────────────────────────────────────────────────────────
 
     private fun handleKeepalive(keepalive: NetworkKeepalive, senderIp: String) {
         val now = System.currentTimeMillis()
         val ownIps = getAllOwnIps()
+
         val fromPeerId: String = keepalive.senderPeerId?.takeIf { it.isNotBlank() }
             ?: keepalive.devices.firstOrNull { d ->
                 d.peerId.isNotBlank() && d.peerId != ownPeerId &&
@@ -535,10 +573,12 @@ class NetworkManager(
                 d.peerId.isNotBlank() && d.peerId != ownPeerId
             }?.peerId
             ?: ""
+
         if (fromPeerId == ownPeerId) {
             Log.v(TAG, "handleKeepalive: игнорируем keepalive от самих себя (self-echo)")
             return
         }
+
         for (device in keepalive.devices) {
             if (device.peerId.isBlank()) continue
             if (device.peerId == ownPeerId) {
@@ -572,6 +612,7 @@ class NetworkManager(
                 udpDiscovery.sendDirectAnnounce(effectiveIp)
             }
         }
+
         if (NativeCore.isInitialized() && fromPeerId.isNotBlank()) {
             val peers = keepalive.devices
                 .filter { it.peerId != ownPeerId && it.peerId != fromPeerId && it.peerId.isNotBlank() }
@@ -585,6 +626,7 @@ class NetworkManager(
             val peersJson = org.json.JSONArray(peers).toString()
             NativeCore.updateRoutingTable(fromPeerId, senderIp, peersJson)
         }
+
         keepalive.routingTableJson?.let { rtJson ->
             if (rtJson.isNotBlank() && rtJson != "[]" && fromPeerId.isNotBlank()) {
                 processRemoteRoutingTable(rtJson, senderIp, fromPeerId)
@@ -713,8 +755,7 @@ class NetworkManager(
                 return@launch
             }
             if (msg.senderId.isBlank()) return@launch
-            val fileName = fileManager.saveNetworkFile(msg.fileName, msg.fileBase64)
-                ?: msg.fileName
+            val fileName = fileManager.saveNetworkFile(msg.fileName, msg.fileBase64) ?: msg.fileName
             chatRepository.addMessage(
                 FileMessage(
                     msg.messageId, msg.senderId, msg.receiverId,
@@ -754,8 +795,7 @@ class NetworkManager(
                 return@launch
             }
             if (msg.senderId.isBlank()) return@launch
-            val fileName = fileManager.saveNetworkAudio(msg.senderId, msg.timestamp, msg.audioBase64)
-                ?: return@launch
+            val fileName = fileManager.saveNetworkAudio(msg.senderId, msg.timestamp, msg.audioBase64) ?: return@launch
             chatRepository.addMessage(
                 AudioMessage(
                     msg.messageId, msg.senderId, msg.receiverId,
@@ -786,9 +826,14 @@ class NetworkManager(
         scope.launch { chatRepository.updateMessageState(ack.messageId, MessageState.MESSAGE_READ) }
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // ROUTING & SENDING
+    // ──────────────────────────────────────────────────────────────────────
+
     private fun resolveNextHop(peerId: String): Pair<String?, String?> {
         val directIp = peerRegistry.getIp(peerId)
         val device = peerRegistry.peers.value[peerId]
+
         if (directIp != null && (device?.isDirect == true || device?.hopCount == 1)) {
             return Pair(directIp, null)
         }
@@ -815,6 +860,7 @@ class NetworkManager(
         ctx: String
     ): Boolean {
         val (ip, btAddress) = resolveNextHop(peerId)
+
         if (ip != null) {
             try {
                 client.sendRaw(ip, type, payload)
@@ -834,6 +880,10 @@ class NetworkManager(
         return false
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // PUBLIC API — SENDING MESSAGES
+    // ──────────────────────────────────────────────────────────────────────
+
     fun sendTextMessage(peerId: String, text: String) {
         scope.launch {
             identityReady.await()
@@ -847,6 +897,7 @@ class NetworkManager(
         }
     }
 
+    // Legacy Base64 file transfer (for small files)
     fun sendFileMessage(peerId: String, fileUri: Uri) {
         scope.launch {
             identityReady.await()
@@ -858,6 +909,90 @@ class NetworkManager(
             val netMsg = NetworkFileMessage(msg.messageId, ownPeerId, peerId, msg.timestamp, fileName, b64, ttl = 5)
             val payload = json.encodeToString(NetworkFileMessage.serializer(), netMsg).encodeToByteArray()
             sendPacket(peerId, PacketType.FILE_MESSAGE, payload, "sendFile")
+        }
+    }
+
+    // NEW: Chunked file transfer for large files
+    fun sendFileChunked(peerId: String, fileUri: Uri) {
+        scope.launch {
+            identityReady.await()
+
+            val fileName = fileManager.saveMessageFile(fileUri) ?: return@launch
+            val file = fileManager.getFile(fileName)
+            if (!file.exists() || file.length() == 0L) {
+                Log.w(TAG, "sendFileChunked: file empty or not found")
+                return@launch
+            }
+
+            val fileSize = file.length()
+            val fileHash = FileManager.computeSha256(file.readBytes())
+            val chunkSize = FileManager.CHUNK_SIZE
+            val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
+
+            val transferId = java.util.UUID.randomUUID().toString()
+            val initMsg = NetworkFileInit(
+                transferId = transferId,
+                senderId = ownPeerId,
+                receiverId = peerId,
+                fileName = fileName,
+                fileSize = fileSize,
+                fileHash = fileHash,
+                chunkSize = chunkSize,
+                totalChunks = totalChunks,
+                mimeType = context.contentResolver.getType(fileUri),
+                timestamp = System.currentTimeMillis(),
+                ttl = 5
+            )
+
+            // Send init
+            val initPayload = json.encodeToString(NetworkFileInit.serializer(), initMsg).encodeToByteArray()
+            if (!sendPacket(peerId, PACKET_FILE_INIT, initPayload, "send-file-init")) {
+                Log.w(TAG, "sendFileChunked: failed to send init")
+                return@launch
+            }
+
+            // Chunk and send
+            val chunks = fileManager.chunkFile(file, chunkSize)
+            var sentCount = 0
+
+            for ((index, pair) in chunks.withIndex()) {
+                val (chunkData, chunkHash) = pair
+                val chunkMsg = NetworkFileChunk(
+                    transferId = transferId,
+                    chunkIndex = index,
+                    totalChunks = totalChunks,
+                    chunkHash = chunkHash,
+                    data = Base64.encodeToString(chunkData, Base64.NO_WRAP)
+                )
+
+                val chunkPayload = json.encodeToString(NetworkFileChunk.serializer(), chunkMsg).encodeToByteArray()
+                if (sendPacket(peerId, PACKET_FILE_CHUNK, chunkPayload, "send-file-chunk")) {
+                    sentCount++
+                    if (index % 5 == 0) delay(50) // Rate limiting
+                } else {
+                    Log.w(TAG, "sendFileChunked: chunk $index failed, retrying...")
+                    if (sendPacket(peerId, PACKET_FILE_CHUNK, chunkPayload, "send-file-chunk-retry")) {
+                        sentCount++
+                    }
+                }
+            }
+
+            Log.i(TAG, "sendFileChunked: sent $sentCount/$totalChunks chunks for '$fileName'")
+
+            // Add optimistic message to chat
+            var msg = FileMessage(0, ownPeerId, peerId, System.currentTimeMillis(), MessageState.MESSAGE_SENT, fileName)
+            val id = chatRepository.addMessage(msg)
+            msg = msg.copy(messageId = id)
+
+            // Send complete
+            val completeMsg = NetworkFileComplete(
+                transferId = transferId,
+                senderId = ownPeerId,
+                receiverId = peerId,
+                success = true
+            )
+            val completePayload = json.encodeToString(NetworkFileComplete.serializer(), completeMsg).encodeToByteArray()
+            sendPacket(peerId, PACKET_FILE_COMPLETE, completePayload, "send-file-complete")
         }
     }
 
@@ -885,6 +1020,10 @@ class NetworkManager(
         val ip = peerRegistry.getIp(peerId) ?: return
         client.sendAckReceived(ip, NetworkMessageAck(messageId, ownPeerId, peerId))
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // CALL SIGNALING
+    // ──────────────────────────────────────────────────────────────────────
 
     fun sendCallRequest(peerId: String) {
         val ip = peerRegistry.getIp(peerId) ?: run {
@@ -953,9 +1092,12 @@ class NetworkManager(
         _callResponse.value = null
         _callEnd.value = null
         _callFragment.value = null
-
         NotificationHelper.dismissCallNotification(context)
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // PROFILE & DISCOVERY HELPERS
+    // ──────────────────────────────────────────────────────────────────────
 
     private suspend fun requestProfileIfNeeded(peerId: String, ip: String) {
         if (peerId == ownPeerId || peerId.isBlank()) return
@@ -965,6 +1107,7 @@ class NetworkManager(
             null
         }
         val localTimestamp = contact?.account?.profileUpdateTimestamp ?: 0L
+
         val shouldRequest = synchronized(profileLock) {
             if (peerId in profileRequestInFlight) {
                 false
@@ -979,6 +1122,7 @@ class NetworkManager(
             }
         }
         if (!shouldRequest) return
+
         identityReady.await()
         Log.d(TAG, "[PROFILE] Requesting from ${peerId.take(8)} @ $ip")
         try {
@@ -1027,7 +1171,7 @@ class NetworkManager(
     private fun initNsdDiscovery() {
         nsdDiscovery = NsdDiscovery(
             context = context,
-            onPeerFound = { ip, port, peerId, username ->
+            onPeerFound = { ip: String, port: Int, peerId: String, username: String ->
                 if (peerId != ownPeerId && peerId.isNotBlank()) {
                     Log.i(TAG, "[NSD] Found '$username' @ $ip:$port")
                     val device = NetworkDevice(
@@ -1042,12 +1186,11 @@ class NetworkManager(
                     udpDiscovery.sendDirectAnnounce(ip)
                 }
             },
-            onPeerLost = { peerId -> Log.d(TAG, "[NSD] Peer lost: ${peerId.take(8)}") }
+            onPeerLost = { peerId: String -> Log.d(TAG, "[NSD] Peer lost: ${peerId.take(8)}") }
         )
         scope.launch {
             delay(2_000)
-            val shortCode =
-                if (NativeCore.isInitialized()) NativeCore.getOwnShortCode() else ownPeerId.take(4).uppercase()
+            val shortCode = if (NativeCore.isInitialized()) NativeCore.getOwnShortCode() else ownPeerId.take(4).uppercase()
             nsdDiscovery?.start(ownPeerId, ownUsername, shortCode, TCP_PORT)
         }
     }
@@ -1063,8 +1206,208 @@ class NetworkManager(
                     }
                 }
                 Log.d(TAG, "Profile cache warmed: ${profileCache.size} entries")
-            } catch (_: Exception) {
+            } catch (_: Exception) {}
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // UTILS & CLEANUP
+    // ──────────────────────────────────────────────────────────────────────
+
+    private fun saveKnownIp(ip: String) {
+        if (ip.isBlank()) return
+        val current = prefs.getStringSet(PREFS_KEY_KNOWN_IPS, mutableSetOf()) ?: mutableSetOf()
+        val updated = (current + ip).take(MAX_KNOWN_IPS).toMutableSet()
+        prefs.edit().putStringSet(PREFS_KEY_KNOWN_IPS, updated).apply()
+    }
+
+    private fun getKnownIps(): Set<String> =
+        prefs.getStringSet(PREFS_KEY_KNOWN_IPS, emptySet()) ?: emptySet()
+
+    private fun removeKnownIp(ip: String) {
+        val current = prefs.getStringSet(PREFS_KEY_KNOWN_IPS, mutableSetOf()) ?: mutableSetOf()
+        prefs.edit().putStringSet(PREFS_KEY_KNOWN_IPS, (current - ip).toMutableSet()).apply()
+    }
+
+    private suspend fun reconnectKnownPeers() {
+        val knownIps = getKnownIps()
+        if (knownIps.isEmpty()) return
+        Log.i(TAG, "Reconnecting to ${knownIps.size} known peer(s)")
+        for (ip in knownIps) {
+            udpDiscovery.sendDirectAnnounce(ip)
+        }
+    }
+
+    private fun getCurrentOwnIp(): String? {
+        if (receiver.isGroupOwner.value) return WiFiDirectBroadcastReceiver.GROUP_OWNER_IP
+        return getP2pClientIp() ?: getLanIp()
+    }
+
+    private fun getP2pClientIp(): String? = try {
+        NetworkInterface.getNetworkInterfaces()?.toList()
+            ?.filter { it.isUp && !it.isLoopback }
+            ?.flatMap { it.inetAddresses.toList() }
+            ?.filterIsInstance<Inet4Address>()
+            ?.map { it.hostAddress ?: "" }
+            ?.firstOrNull { it.startsWith("192.168.49.") && it != WiFiDirectBroadcastReceiver.GROUP_OWNER_IP }
+    } catch (_: Exception) { null }
+
+    private fun getLanIp(): String? = try {
+        NetworkInterface.getNetworkInterfaces()?.toList()
+            ?.filter { it.isUp && !it.isLoopback && !it.isVirtual }
+            ?.flatMap { it.inetAddresses.toList() }
+            ?.filterIsInstance<Inet4Address>()
+            ?.map { it.hostAddress ?: "" }
+            ?.firstOrNull { !it.startsWith("127.") && !it.startsWith("169.254.") && !it.startsWith("192.168.49.") }
+    } catch (_: Exception) { null }
+
+    private fun getAllOwnIps(): List<String> {
+        val ips = mutableListOf<String>()
+        if (receiver.isGroupOwner.value) ips.add(WiFiDirectBroadcastReceiver.GROUP_OWNER_IP)
+        getP2pClientIp()?.let { ips.add(it) }
+        getLanIp()?.let { if (it !in ips) ips.add(it) }
+        return ips
+    }
+
+    private fun observeUdpPeers() {
+        scope.launch {
+            Log.d(TAG, "[UDP] observeUdpPeers started, ownPeerId=${ownPeerId.take(8)}")
+            udpDiscovery.peers.collect { udpPeers ->
+                val myId = ownPeerId
+                for ((peerId, discovered) in udpPeers) {
+                    if (myId.isNotBlank() && peerId == myId) continue
+                    if (peerId.isBlank()) continue
+                    val device = NetworkDevice(
+                        peerId = peerId,
+                        username = discovered.announce.username,
+                        shortCode = discovered.announce.shortCode,
+                        publicKeyHex = discovered.announce.publicKeyHex,
+                        ipAddress = discovered.ip,
+                        keepalive = System.currentTimeMillis(),
+                        hopCount = 1
+                    )
+                    peerRegistry.upsert(device, "udp")
+                    saveKnownIp(discovered.ip)
+                    scope.launch { requestProfileIfNeeded(peerId, discovered.ip) }
+                }
             }
+        }
+    }
+
+    private fun observeWifiDirectGroup() {
+        scope.launch {
+            combine(receiver.isGroupOwner, receiver.groupOwnerAddress) { isOwner: Boolean, ownerIp: String? ->
+                Pair(isOwner, ownerIp)
+            }.collectLatest { (isOwner: Boolean, ownerIp: String?) ->
+                val newIp = if (isOwner) WiFiDirectBroadcastReceiver.GROUP_OWNER_IP
+                else getP2pClientIp() ?: getLanIp()
+                if (newIp != null && newIp != ownIpAddress) {
+                    ownIpAddress = newIp
+                    Log.i(TAG, "[P2P] Own IP: $newIp (isOwner=$isOwner)")
+                    udpDiscovery.updateOwnIp(newIp)
+                    udpDiscovery.updateOwnIdentity(
+                        peerId = ownPeerId,
+                        username = ownUsername,
+                        shortCode = if (NativeCore.isInitialized()) NativeCore.getOwnShortCode() else ownPeerId.take(4).uppercase(),
+                        publicKeyHex = if (NativeCore.isInitialized()) NativeCore.getOwnPublicKeyHex() else ""
+                    )
+                }
+                if (!isOwner && ownerIp != null && ownerIp != ownIpAddress) {
+                    Log.i(TAG, "[P2P] Connected to GO @ $ownerIp — sending direct announce (x3)")
+                    saveKnownIp(ownerIp)
+                    udpDiscovery.sendDirectAnnounce(ownerIp)
+                    scope.launch {
+                        delay(1_000)
+                        udpDiscovery.sendDirectAnnounce(ownerIp)
+                        delay(2_000)
+                        udpDiscovery.sendDirectAnnounce(ownerIp)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startPeriodicRediscovery() {
+        scope.launch {
+            while (isActive) {
+                delay(60_000)
+                val ownIp = getCurrentOwnIp()
+                if (ownIp != null) udpDiscovery.updateOwnIp(ownIp)
+                receiver.discoverPeers()
+                val allKnownIps = getKnownIps()
+                for (ip in allKnownIps) {
+                    udpDiscovery.sendDirectAnnounce(ip)
+                }
+            }
+        }
+    }
+
+    fun forceRediscover() {
+        scope.launch {
+            Log.i(TAG, "Force rediscover triggered")
+            receiver.discoverPeers()
+            getCurrentOwnIp()?.let { udpDiscovery.updateOwnIp(it) }
+            val allIps = (getKnownIps() + peerRegistry.peers.value.values.mapNotNull { it.ipAddress })
+                .filter { it.isNotBlank() }.toSet()
+            for (ip in allIps) udpDiscovery.sendDirectAnnounce(ip)
+        }
+    }
+
+    private fun startKeepaliveLoop() {
+        scope.launch {
+            delay(1_000)
+            while (isActive) {
+                sendKeepalive()
+                delay(KEEPALIVE_INTERVAL_MS)
+            }
+        }
+    }
+
+    private suspend fun sendKeepalive() {
+        if (ownPeerId.isBlank()) return
+        try {
+            val currentIp = getCurrentOwnIp()
+            if (currentIp != null) {
+                ownIpAddress = currentIp
+                udpDiscovery.updateOwnIp(currentIp)
+            }
+            val profile = ownProfileRepository.getProfile()
+            val username = profile.username.ifBlank { ownUsername }
+            val ownDevice = NetworkDevice(
+                peerId = ownPeerId,
+                username = username,
+                shortCode = if (NativeCore.isInitialized()) NativeCore.getOwnShortCode() else ownPeerId.take(4).uppercase(),
+                publicKeyHex = if (NativeCore.isInitialized()) NativeCore.getOwnPublicKeyHex() else "",
+                ipAddress = currentIp,
+                keepalive = System.currentTimeMillis(),
+                hopCount = 1
+            )
+            val knownPeers = peerRegistry.peers.value.values
+                .filter { it.shortCode.isNotBlank() && it.peerId != ownPeerId }
+            val routingTableJson = if (NativeCore.isInitialized()) NativeCore.getRoutingTableJson() else null
+            val keepalive = NetworkKeepalive(
+                devices = listOf(ownDevice) + knownPeers,
+                senderPeerId = ownPeerId,
+                routingTableJson = routingTableJson
+            )
+            val targets = buildSet<String> {
+                if (!receiver.isGroupOwner.value) {
+                    add(WiFiDirectBroadcastReceiver.GROUP_OWNER_IP)
+                }
+                receiver.groupOwnerAddress.value?.let { if (it != currentIp) add(it) }
+                knownPeers.mapNotNull { it.ipAddress }.forEach { add(it) }
+            }.filter { it != currentIp && it.isNotBlank() }
+
+            for (ip in targets) {
+                val localIp = client.sendKeepaliveReturnLocalIp(ip, keepalive)
+                if (localIp != null && localIp != currentIp && localIp != "0.0.0.0") {
+                    ownIpAddress = localIp
+                    udpDiscovery.updateOwnIp(localIp)
+                }
+                saveKnownIp(ip)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "sendKeepalive error: ${e.message}")
         }
     }
 
@@ -1089,4 +1432,23 @@ class NetworkManager(
         scope.cancel()
         Log.i(TAG, "NetworkManager stopped")
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// FILE TRANSFER STATE MODEL
+// ──────────────────────────────────────────────────────────────────────
+data class FileTransferState(
+    val transferId: String,
+    val fileName: String,
+    val totalChunks: Int,
+    val receivedChunks: MutableSet<Int> = mutableSetOf(),
+    val status: TransferStatus = TransferStatus.IN_PROGRESS,
+    val startTime: Long = System.currentTimeMillis()
+)
+
+enum class TransferStatus {
+    IN_PROGRESS,
+    COMPLETED,
+    FAILED,
+    CANCELLED
 }

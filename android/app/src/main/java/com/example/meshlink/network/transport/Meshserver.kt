@@ -1,6 +1,3 @@
-// ==========================================
-// ФАЙЛ: C:\Users\GAMER\AndroidStudioProjects\meshlink_nuclearhack.mephi\android\app\src\main\java\com\example\meshlink\network\transport\MeshServer.kt
-// ==========================================
 package com.example.meshlink.network.transport
 
 import android.util.Log
@@ -21,6 +18,7 @@ class MeshServer(val port: Int = 8800) {
     @Volatile private var serverSocket: ServerSocket? = null
     @Volatile var isRunning = false
 
+    // Existing callbacks
     var onKeepalive: ((NetworkKeepalive, String) -> Unit)? = null
     var onProfileRequest: ((NetworkProfileRequest, String) -> Unit)? = null
     var onProfileResponse: ((NetworkProfileResponse) -> Unit)? = null
@@ -34,10 +32,11 @@ class MeshServer(val port: Int = 8800) {
     var onCallEnd: ((NetworkCallEnd) -> Unit)? = null
     var onCallAudio: ((ByteArray, String) -> Unit)? = null
 
-    // ⛔️ WEBRTC CALLBACKS УДАЛЕНЫ:
-    // ❌ var onWebRtcOffer: ((NetworkWebRtcOffer) -> Unit)? = null
-    // ❌ var onWebRtcAnswer: ((NetworkWebRtcAnswer) -> Unit)? = null
-    // ❌ var onWebRtcIceCandidate: ((NetworkWebRtcIceCandidate) -> Unit)? = null
+
+    var onFileInit: ((NetworkFileInit) -> Unit)? = null
+    var onFileChunk: ((NetworkFileChunk, String) -> Unit)? = null
+    var onFileChunkAck: ((NetworkFileChunkAck) -> Unit)? = null
+    var onFileComplete: ((NetworkFileComplete) -> Unit)? = null
 
     fun start() {
         scope.launch {
@@ -124,10 +123,25 @@ class MeshServer(val port: Int = 8800) {
                     onCallEnd?.invoke(json.decodeFromString(payload.decodeToString()))
                 PacketType.CALL_AUDIO ->
                     onCallAudio?.invoke(payload, senderIp)
-                // ⛔️ WEBRTC CASES УДАЛЕНЫ:
-                // ❌ PacketType.WEBRTC_OFFER -> { ... }
-                // ❌ PacketType.WEBRTC_ANSWER -> { ... }
-                // ❌ PacketType.WEBRTC_ICE_CANDIDATE -> { ... }
+
+
+                100 ->
+                    onFileInit?.invoke(json.decodeFromString(payload.decodeToString()))
+                101 ->
+                    onFileChunk?.invoke(json.decodeFromString(payload.decodeToString()), senderIp)
+                102 ->
+                    onFileChunkAck?.invoke(json.decodeFromString(payload.decodeToString()))
+                103 ->
+                    Log.d(TAG, "FILE_RETRY received (not implemented)")
+                104 ->
+                    onFileComplete?.invoke(json.decodeFromString(payload.decodeToString()))
+                105 ->
+                    Log.d(TAG, "FILE_STATUS_REQ received (not implemented)")
+                106 ->
+                    Log.d(TAG, "FILE_STATUS_RESP received (not implemented)")
+                107 ->
+                    Log.d(TAG, "FILE_CANCEL received (not implemented)")
+
                 else ->
                     Log.w(TAG, "Unknown packet type=$type from $senderIp")
             }

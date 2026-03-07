@@ -10,7 +10,6 @@ import java.net.ServerSocket
 import java.net.SocketException
 
 class MeshServer(val port: Int = 8800) {
-
     companion object {
         private const val TAG = "MeshServer"
     }
@@ -32,6 +31,11 @@ class MeshServer(val port: Int = 8800) {
     var onCallEnd: ((NetworkCallEnd) -> Unit)? = null
     var onCallAudio: ((ByteArray, String) -> Unit)? = null
 
+    // ── WebRTC callbacks ────────────────────────────────────────────────────
+    var onWebRtcOffer: ((NetworkWebRtcOffer) -> Unit)? = null
+    var onWebRtcAnswer: ((NetworkWebRtcAnswer) -> Unit)? = null
+    var onWebRtcIceCandidate: ((NetworkWebRtcIceCandidate) -> Unit)? = null
+
     fun start() {
         scope.launch {
             var retries = 0
@@ -45,11 +49,9 @@ class MeshServer(val port: Int = 8800) {
                     serverSocket = ss
                     isRunning = true
                     Log.i(TAG, "✓ TCP server listening on port $port")
-
                     while (isActive) {
                         try {
                             val client = ss.accept()
-
                             launch { handleClient(client) }
                         } catch (e: SocketException) {
                             if (!isActive) break
@@ -119,6 +121,19 @@ class MeshServer(val port: Int = 8800) {
                     onCallEnd?.invoke(json.decodeFromString(payload.decodeToString()))
                 PacketType.CALL_AUDIO ->
                     onCallAudio?.invoke(payload, senderIp)
+                // ── WebRTC пакеты ────────────────────────────────────────────
+                PacketType.WEBRTC_OFFER -> {
+                    val offer = json.decodeFromString<NetworkWebRtcOffer>(payload.decodeToString())
+                    onWebRtcOffer?.invoke(offer)
+                }
+                PacketType.WEBRTC_ANSWER -> {
+                    val answer = json.decodeFromString<NetworkWebRtcAnswer>(payload.decodeToString())
+                    onWebRtcAnswer?.invoke(answer)
+                }
+                PacketType.WEBRTC_ICE_CANDIDATE -> {
+                    val candidate = json.decodeFromString<NetworkWebRtcIceCandidate>(payload.decodeToString())
+                    onWebRtcIceCandidate?.invoke(candidate)
+                }
                 else ->
                     Log.w(TAG, "Unknown packet type=$type from $senderIp")
             }

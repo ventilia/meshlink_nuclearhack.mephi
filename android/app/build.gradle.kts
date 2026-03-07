@@ -42,7 +42,6 @@ android {
     }
 
     kotlinOptions {
-
         jvmTarget = "17"
     }
 
@@ -62,10 +61,10 @@ android {
 }
 
 dependencies {
-
+    // ── WebRTC — СТАБИЛЬНАЯ ВЕРСИЯ (не самая новая) ─────────────────────────
+    implementation("io.getstream:stream-webrtc-android:1.0.3")
 
     implementation("androidx.appcompat:appcompat:1.7.0")
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -91,7 +90,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.text.google.fonts)
 
     testImplementation(libs.junit)
-
     testImplementation("io.mockk:mockk:1.13.10")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
 

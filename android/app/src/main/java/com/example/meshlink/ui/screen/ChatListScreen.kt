@@ -25,16 +25,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
 import com.example.meshlink.core.NativeCore
 import com.example.meshlink.domain.model.NetworkDevice
 import com.example.meshlink.domain.model.chat.ChatPreview
 import com.example.meshlink.domain.model.message.TextMessage
+import com.example.meshlink.ui.components.ContactAvatarImage
 import com.example.meshlink.ui.theme.*
 import com.example.meshlink.ui.viewmodel.ChatListViewModel
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
-import coil.compose.AsyncImage
-import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +50,11 @@ fun ChatListScreen(
     val connectedDevices by viewModel.connectedDevices.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val deleteConfirmPeerId by viewModel.deleteConfirmPeerId.collectAsState()
+
+    // Множество onlineIds для O(1) проверки онлайн-статуса в ЧАТЫ
+    val onlinePeerIds by remember(connectedDevices) {
+        derivedStateOf { connectedDevices.map { it.peerId }.toSet() }
+    }
 
     val pullRefreshState = rememberPullToRefreshState()
     if (pullRefreshState.isRefreshing) {
@@ -70,6 +76,7 @@ fun ChatListScreen(
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
 
+            // ── Топбар ────────────────────────────────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -84,15 +91,13 @@ fun ChatListScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Логотип — пиксельный квадрат с иконкой
+                    // Логотип
                     Box(
                         modifier = Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(8.dp))
                             .background(
-                                Brush.linearGradient(
-                                    listOf(PixelAccentDark, PixelPurple)
-                                )
+                                Brush.linearGradient(listOf(PixelAccentDark, PixelPurple))
                             ),
                         contentAlignment = Alignment.Center
                     ) {
@@ -103,9 +108,7 @@ fun ChatListScreen(
                             modifier = Modifier.size(20.dp)
                         )
                     }
-
                     Spacer(Modifier.width(12.dp))
-
                     Column {
                         Text(
                             text = "MESHLINK",
@@ -122,7 +125,7 @@ fun ChatListScreen(
                     }
                 }
 
-
+                // Кнопка настроек — ИСПРАВЛЕНО: правильный размер и выравнивание иконки
                 Box(
                     modifier = Modifier
                         .size(38.dp)
@@ -136,12 +139,12 @@ fun ChatListScreen(
                         imageVector = MeshIcons.Settings,
                         contentDescription = "Настройки",
                         tint = PixelTextDim,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)  // ИСПРАВЛЕНО: 18dp вместо 20dp
                     )
                 }
             }
 
-
+            // ── Статус-строка ─────────────────────────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -150,8 +153,9 @@ fun ChatListScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val totalPeers = connectedDevices.size + chatPreviews.size
+                val totalPeers = connectedDevices.size
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // ИСПРАВЛЕНО: иконка сети с правильным размером
                     Box(
                         Modifier
                             .size(6.dp)
@@ -162,7 +166,11 @@ fun ChatListScreen(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = if (totalPeers == 0) "СКАНИРУЮ..." else "$totalPeers ПИРОВ",
+                        text = when {
+                            totalPeers == 0 -> "СКАНИРУЮ..."
+                            totalPeers == 1 -> "1 ПИР"
+                            else -> "$totalPeers ПИРОВ"
+                        },
                         fontFamily = PressStart2PFamily,
                         fontSize = 7.sp,
                         color = if (totalPeers > 0) PixelAccent else PixelTextDim
@@ -176,15 +184,14 @@ fun ChatListScreen(
                 )
             }
 
+            // ── Список ────────────────────────────────────────────────────────
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
 
                 if (connectedDevices.isNotEmpty()) {
-                    item {
-                        SectionHeader("ПОБЛИЗОСТИ")
-                    }
+                    item { SectionHeader("ПОБЛИЗОСТИ") }
                     items(connectedDevices, key = { it.peerId }) { device ->
                         NearbyDeviceItem(device = device, onClick = { onChatClick(device.peerId) })
                     }
@@ -197,19 +204,20 @@ fun ChatListScreen(
                     }
                 }
 
-
                 if (chatPreviews.isNotEmpty()) {
                     item { SectionHeader("ЧАТЫ") }
                     items(chatPreviews, key = { it.contact.peerId }) { preview ->
+                        // НОВОЕ: передаём isOnline для зелёного огонька
+                        val isOnline = preview.contact.peerId in onlinePeerIds
                         ChatPreviewItem(
                             preview = preview,
                             filesDir = context.filesDir,
+                            isOnline = isOnline,
                             onClick = { onChatClick(preview.contact.peerId) },
                             onLongPress = { viewModel.requestDeleteChat(preview.contact.peerId) }
                         )
                     }
                 }
-
 
                 if (chatPreviews.isEmpty() && connectedDevices.isEmpty()) {
                     item {
@@ -255,7 +263,7 @@ fun ChatListScreen(
         )
     }
 
-
+    // ── Диалог удаления ───────────────────────────────────────────────────────
     if (deleteConfirmPeerId != null) {
         val peerId = deleteConfirmPeerId!!
         val preview = chatPreviews.find { it.contact.peerId == peerId }
@@ -309,7 +317,6 @@ fun ChatListScreen(
     }
 }
 
-
 @Composable
 private fun SectionHeader(title: String) {
     Text(
@@ -321,7 +328,6 @@ private fun SectionHeader(title: String) {
     )
 }
 
-
 @Composable
 private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
     Row(
@@ -332,32 +338,36 @@ private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            if (device.isDirect) PixelAccentDark else PixelPurple,
-                            if (device.isDirect) Color(0xFF1A4A30) else Color(0xFF2A1A4A)
+        // Аватар с онлайн-точкой (всегда онлайн в разделе ПОБЛИЗОСТИ)
+        Box {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                if (device.isDirect) PixelAccentDark else PixelPurple,
+                                if (device.isDirect) Color(0xFF1A4A30) else Color(0xFF2A1A4A)
+                            )
                         )
                     )
+                    .border(
+                        1.dp,
+                        if (device.isDirect) PixelAccent.copy(alpha = 0.5f) else PixelPurpleLight.copy(alpha = 0.5f),
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    device.username.ifBlank { "?" }.take(1).uppercase(),
+                    fontFamily = PressStart2PFamily,
+                    fontSize = 14.sp,
+                    color = PixelText
                 )
-                .border(
-                    1.dp,
-                    if (device.isDirect) PixelAccent.copy(alpha = 0.5f) else PixelPurpleLight.copy(alpha = 0.5f),
-                    CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                device.username.ifBlank { "?" }.take(1).uppercase(),
-                fontFamily = PressStart2PFamily,
-                fontSize = 14.sp,
-                color = PixelText
-            )
+            }
+            // Зелёный огонёк — всегда для ПОБЛИЗОСТИ
+            OnlineDot(modifier = Modifier.align(Alignment.BottomEnd))
         }
 
         Spacer(Modifier.width(12.dp))
@@ -373,15 +383,6 @@ private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
             )
             Spacer(Modifier.height(3.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(5.dp)
-                        .background(
-                            if (device.isDirect) PixelAccent else Color(0xFF00CFFF),
-                            CircleShape
-                        )
-                )
-                Spacer(Modifier.width(4.dp))
                 Text(
                     text = "[${device.shortCode}]",
                     fontFamily = PressStart2PFamily,
@@ -400,7 +401,6 @@ private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
             }
         }
 
-
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
@@ -418,11 +418,16 @@ private fun NearbyDeviceItem(device: NetworkDevice, onClick: () -> Unit) {
     }
 }
 
-
+/**
+ * Элемент чата с зелёным огоньком если контакт онлайн.
+ *
+ * @param isOnline true если peerId присутствует в connectedDevices
+ */
 @Composable
 private fun ChatPreviewItem(
     preview: ChatPreview,
     filesDir: File,
+    isOnline: Boolean,
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
@@ -439,30 +444,57 @@ private fun ChatPreviewItem(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Аватар с опциональным зелёным огоньком
+        Box {
+            ContactAvatarImage(
+                displayName = preview.contact.username ?: preview.contact.peerId,
+                imageFileName = preview.contact.imageFileName,
+                filesDir = filesDir,
+                size = 50.dp,
+                fontSize = 16.sp
+            )
+            // НОВОЕ: зелёный огонёк если онлайн
+            if (isOnline) {
+                OnlineDot(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                )
+            }
+        }
 
-        ContactAvatarImage(
-            displayName = preview.contact.username ?: preview.contact.peerId,
-            imageFileName = preview.contact.imageFileName,
-            filesDir = filesDir,
-            size = 50.dp,
-            fontSize = 16.sp
-        )
         Spacer(Modifier.width(12.dp))
+
         Column(modifier = Modifier.weight(1f)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = (preview.contact.username ?: preview.contact.peerId.take(8)).uppercase(),
-                    fontFamily = PressStart2PFamily,
-                    fontSize = 10.sp,
-                    color = PixelText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
-                )
+                ) {
+                    Text(
+                        text = (preview.contact.username ?: preview.contact.peerId.take(8)).uppercase(),
+                        fontFamily = PressStart2PFamily,
+                        fontSize = 10.sp,
+                        color = PixelText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    // НОВОЕ: маленький текстовый статус рядом с именем
+                    if (isOnline) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "●",
+                            fontSize = 8.sp,
+                            color = Color(0xFF00E676),
+                            lineHeight = 10.sp
+                        )
+                    }
+                }
                 preview.lastMessage?.let { msg ->
                     Text(
                         text = formatTimestamp(msg.timestamp),
@@ -480,12 +512,12 @@ private fun ChatPreviewItem(
                 Text(
                     text = when (val msg = preview.lastMessage) {
                         is TextMessage -> msg.text.take(40)
-                        null -> "нет сообщений"
+                        null -> if (isOnline) "онлайн" else "нет сообщений"
                         else -> "[файл]"
                     },
                     fontFamily = PressStart2PFamily,
                     fontSize = 6.sp,
-                    color = PixelTextDim,
+                    color = if (isOnline && preview.lastMessage == null) Color(0xFF00E676).copy(alpha = 0.7f) else PixelTextDim,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -518,54 +550,27 @@ private fun ChatPreviewItem(
     )
 }
 
+/**
+ * Зелёный огонёк "онлайн" — маленькая точка с белой обводкой.
+ */
+@Composable
+private fun OnlineDot(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(12.dp)
+            .background(PixelBlack, CircleShape)
+            .padding(2.dp)
+            .background(Color(0xFF00E676), CircleShape)
+    )
+}
+
 private fun formatTimestamp(timestamp: Long): String {
     val now = System.currentTimeMillis()
     val diff = now - timestamp
     return when {
-        diff < 60_000 -> "сейчас"
-        diff < 3_600_000 -> "${diff / 60_000}м"
+        diff < 60_000     -> "сейчас"
+        diff < 3_600_000  -> "${diff / 60_000}м"
         diff < 86_400_000 -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
-        else -> SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(timestamp))
-    }
-}
-
-
-@Composable
-fun ContactAvatarImage(
-    displayName: String,
-    imageFileName: String?,
-    filesDir: File,
-    size: androidx.compose.ui.unit.Dp,
-    fontSize: androidx.compose.ui.unit.TextUnit
-) {
-    val initial = displayName.take(1).uppercase()
-    val imagePath = imageFileName?.let { File(filesDir, it).absolutePath }
-
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(
-                Brush.linearGradient(
-                    listOf(PixelPurple, Color(0xFF2A1A4A))
-                )
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        if (imagePath != null && File(imagePath).exists()) {
-            AsyncImage(
-                model = imagePath,
-                contentDescription = "Аватар",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop
-            )
-        } else {
-            Text(
-                text = initial,
-                fontFamily = PressStart2PFamily,
-                fontSize = fontSize,
-                color = PixelText
-            )
-        }
+        else              -> SimpleDateFormat("dd.MM", Locale.getDefault()).format(Date(timestamp))
     }
 }

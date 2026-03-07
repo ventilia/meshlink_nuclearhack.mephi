@@ -35,7 +35,6 @@ import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
-
 class NetworkManager(
     private val context: Context,
     private val ownAccountRepository: OwnAccountRepository,
@@ -61,15 +60,17 @@ class NetworkManager(
     @Volatile
     var ownPeerId: String = ""
         private set
+
     @Volatile
     private var ownUsername: String = ""
+
     @Volatile
     private var ownIpAddress: String? = null
+
     @Volatile
     private var started = false
 
     private val identityReady = CompletableDeferred<Unit>()
-
     private val _ownPeerIdFlow = MutableStateFlow("")
     val ownPeerIdFlow: StateFlow<String> = _ownPeerIdFlow.asStateFlow()
 
@@ -86,48 +87,54 @@ class NetworkManager(
 
     val connectedDevices: StateFlow<Map<String, NetworkDevice>> = peerRegistry.peers
 
-
-    private val profileCache = mutableMapOf<String, Long>() // peerId → updateTimestamp
+    private val profileCache = mutableMapOf<String, Long>()
     private val profileRequestInFlight = mutableSetOf<String>()
     private val profileLock = Any()
 
+    // ── Call Signaling Flows ─────────────────────────────────────────────────
     private val _callRequest = MutableStateFlow<NetworkCallRequest?>(null)
     val callRequest: StateFlow<NetworkCallRequest?> = _callRequest
+
     private val _callResponse = MutableStateFlow<NetworkCallResponse?>(null)
     val callResponse: StateFlow<NetworkCallResponse?> = _callResponse
+
     private val _callEnd = MutableStateFlow<NetworkCallEnd?>(null)
     val callEnd: StateFlow<NetworkCallEnd?> = _callEnd
+
     private val _callFragment = MutableStateFlow<ByteArray?>(null)
     val callFragment: StateFlow<ByteArray?> = _callFragment
 
+    // ── WebRTC Signaling Flows ──────────────────────────────────────────────
+    private val _webRtcOffer = MutableStateFlow<NetworkWebRtcOffer?>(null)
+    val webRtcOffer: StateFlow<NetworkWebRtcOffer?> = _webRtcOffer
+
+    private val _webRtcAnswer = MutableStateFlow<NetworkWebRtcAnswer?>(null)
+    val webRtcAnswer: StateFlow<NetworkWebRtcAnswer?> = _webRtcAnswer
+
+    private val _webRtcIceCandidate = MutableStateFlow<NetworkWebRtcIceCandidate?>(null)
+    val webRtcIceCandidate: StateFlow<NetworkWebRtcIceCandidate?> = _webRtcIceCandidate
 
     fun start() {
         if (started) return
         started = true
         Log.i(TAG, "NetworkManager STARTING")
-
         setupServerHandlers()
         server.start()
         udpDiscovery.start()
         peerRegistry.start()
-
         if (bluetoothTransport.isAvailable()) {
             bluetoothTransport.startServer()
             Log.i(TAG, "Bluetooth transport started")
         }
-
         scope.launch {
             initIdentity()
-
             val initialIp = getLanIp()
             if (initialIp != null) {
                 ownIpAddress = initialIp
                 udpDiscovery.updateOwnIp(initialIp)
                 Log.i(TAG, "Initial LAN IP: $initialIp")
             }
-
             identityReady.await()
-
             reconnectKnownPeers()
             initNsdDiscovery()
             observeUdpPeers()
@@ -138,21 +145,16 @@ class NetworkManager(
         }
     }
 
-
     private suspend fun initIdentity() {
         try {
             val profile = ownProfileRepository.getProfile()
             ownUsername = profile.username.ifBlank { Build.MODEL }
-
             val filesDir = context.filesDir.absolutePath
-
             val androidId = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ANDROID_ID
             ) ?: ""
-
             ensureIdentityIsUnique(filesDir, androidId)
-
             val deviceSeed = if (androidId.isNotBlank()) {
                 "${ownUsername}_${androidId}"
             } else {
@@ -163,21 +165,16 @@ class NetworkManager(
                 }
                 "${ownUsername}_${salt}"
             }
-
             val coreInitialized = NativeCore.initWithFilesDir(filesDir, deviceSeed)
-
             if (coreInitialized) {
                 val rustPeerId = NativeCore.getOwnPeerIdHex()
                 val rustShortCode = NativeCore.getOwnShortCode()
                 val rustPubKey = NativeCore.getOwnPublicKeyHex()
-
                 if (rustPeerId.isNotBlank()) {
                     ownPeerId = rustPeerId
                     ownAccountRepository.setPeerId(ownPeerId)
                     ownProfileRepository.setPeerId(ownPeerId)
-
                     Log.i(TAG, "✓ Core ONLINE: sc=$rustShortCode id=${ownPeerId.take(16)}...")
-
                     udpDiscovery.updateOwnIdentity(
                         peerId = ownPeerId,
                         username = ownUsername,
@@ -191,11 +188,9 @@ class NetworkManager(
                 Log.w(TAG, "Rust core init failed, using fallback")
                 fallbackIdentity()
             }
-
             _ownPeerIdFlow.value = ownPeerId
             identityReady.complete(Unit)
             Log.i(TAG, "Identity ready: ${ownPeerId.take(16)}... (core=${NativeCore.isInitialized()})")
-
         } catch (e: Exception) {
             Log.e(TAG, "initIdentity failed: ${e.message}", e)
             fallbackIdentity()
@@ -207,7 +202,6 @@ class NetworkManager(
     private fun ensureIdentityIsUnique(filesDir: String, androidId: String) {
         val migrationKey = "identity_migrated_v2"
         if (prefs.getBoolean(migrationKey, false)) return
-
         val identityFile = File(filesDir, "meshlink_identity.bin")
         if (identityFile.exists()) {
             Log.w(TAG, "Resetting old identity — will regenerate with unique seed")
@@ -234,7 +228,6 @@ class NetworkManager(
         )
     }
 
-
     private fun saveKnownIp(ip: String) {
         if (ip.isBlank()) return
         val current = prefs.getStringSet(PREFS_KEY_KNOWN_IPS, mutableSetOf()) ?: mutableSetOf()
@@ -259,7 +252,6 @@ class NetworkManager(
         }
     }
 
-
     private fun setupServerHandlers() {
         server.onKeepalive = { keepalive, senderIp ->
             scope.launch {
@@ -279,16 +271,13 @@ class NetworkManager(
         server.onAudioMessage = { msg -> handleAudioMessage(msg) }
         server.onAckReceived = { ack -> handleAckReceived(ack) }
         server.onAckRead = { ack -> handleAckRead(ack) }
-
-
         server.onCallRequest = { req ->
             _callRequest.value = req
             if (!AppForegroundTracker.isInForeground()) {
                 scope.launch {
                     val contact = contactRepository.getAllContactsAsFlow().first()
                         .find { it.peerId == req.senderId }
-                    val callerName = contact?.username
-                        ?: req.senderId.take(8).uppercase()
+                    val callerName = contact?.username ?: req.senderId.take(8).uppercase()
                     NotificationHelper.showCallNotification(context, callerName, req.senderId)
                 }
             }
@@ -299,6 +288,39 @@ class NetworkManager(
             NotificationHelper.dismissCallNotification(context)
         }
         server.onCallAudio = { bytes, _ -> _callFragment.value = bytes }
+
+        // ── WebRTC Signaling Handlers ────────────────────────────────────────
+        // ИСПРАВЛЕНО: обёртываем в scope.launch для вызова suspend функций
+        server.onWebRtcOffer = { offer ->
+            scope.launch {  // <-- ДОБАВЛЕНО
+                if (offer.receiverId == ownPeerId) {
+                    Log.d(TAG, "WebRTC Offer received from ${offer.senderId.take(8)}")
+                    _webRtcOffer.value = offer
+                } else if (offer.ttl > 0) {
+                    forwardWebRtcOffer(offer)
+                }
+            }
+        }
+        server.onWebRtcAnswer = { answer ->
+            scope.launch {  // <-- ДОБАВЛЕНО
+                if (answer.receiverId == ownPeerId) {
+                    Log.d(TAG, "WebRTC Answer received from ${answer.senderId.take(8)}")
+                    _webRtcAnswer.value = answer
+                } else if (answer.ttl > 0) {
+                    forwardWebRtcAnswer(answer)
+                }
+            }
+        }
+        server.onWebRtcIceCandidate = { candidate ->
+            scope.launch {  // <-- ДОБАВЛЕНО
+                if (candidate.receiverId == ownPeerId) {
+                    Log.v(TAG, "WebRTC ICE candidate received from ${candidate.senderId.take(8)}")
+                    _webRtcIceCandidate.value = candidate
+                } else if (candidate.ttl > 0) {
+                    forwardWebRtcIceCandidate(candidate)
+                }
+            }
+        }
     }
 
     private fun dispatchIncomingPacket(type: Int, payload: ByteArray, senderAddress: String) {
@@ -315,6 +337,18 @@ class NetworkManager(
                     handleProfileRequest(json.decodeFromString(payload.decodeToString()), senderAddress)
                 }
                 PacketType.PROFILE_RESPONSE -> handleProfileResponse(json.decodeFromString(payload.decodeToString()))
+                PacketType.WEBRTC_OFFER -> {
+                    val offer = json.decodeFromString<NetworkWebRtcOffer>(payload.decodeToString())
+                    setupServerHandlers().let { server.onWebRtcOffer?.invoke(offer) }
+                }
+                PacketType.WEBRTC_ANSWER -> {
+                    val answer = json.decodeFromString<NetworkWebRtcAnswer>(payload.decodeToString())
+                    setupServerHandlers().let { server.onWebRtcAnswer?.invoke(answer) }
+                }
+                PacketType.WEBRTC_ICE_CANDIDATE -> {
+                    val candidate = json.decodeFromString<NetworkWebRtcIceCandidate>(payload.decodeToString())
+                    setupServerHandlers().let { server.onWebRtcIceCandidate?.invoke(candidate) }
+                }
                 else -> Log.d(TAG, "BT unknown packet type=$type from $senderAddress")
             }
         } catch (e: Exception) {
@@ -322,7 +356,73 @@ class NetworkManager(
         }
     }
 
+    // ── WebRTC Forwarding Methods ───────────────────────────────────────────
+    private suspend fun forwardWebRtcOffer(offer: NetworkWebRtcOffer) {
+        val relayed = offer.copy(ttl = offer.ttl - 1)
+        val payload = json.encodeToString(NetworkWebRtcOffer.serializer(), relayed).encodeToByteArray()
+        sendPacket(offer.receiverId, PacketType.WEBRTC_OFFER, payload, "forward-webrtc-offer")
+    }
 
+    private suspend fun forwardWebRtcAnswer(answer: NetworkWebRtcAnswer) {
+        val relayed = answer.copy(ttl = answer.ttl - 1)
+        val payload = json.encodeToString(NetworkWebRtcAnswer.serializer(), relayed).encodeToByteArray()
+        sendPacket(answer.receiverId, PacketType.WEBRTC_ANSWER, payload, "forward-webrtc-answer")
+    }
+
+    private suspend fun forwardWebRtcIceCandidate(candidate: NetworkWebRtcIceCandidate) {
+        val relayed = candidate.copy(ttl = candidate.ttl - 1)
+        val payload = json.encodeToString(NetworkWebRtcIceCandidate.serializer(), relayed).encodeToByteArray()
+        sendPacket(candidate.receiverId, PacketType.WEBRTC_ICE_CANDIDATE, payload, "forward-webrtc-ice")
+    }
+
+    // ── WebRTC Send Methods ─────────────────────────────────────────────────
+    fun sendWebRtcOffer(peerId: String, sdpJson: String, withVideo: Boolean) {
+        scope.launch {
+            identityReady.await()
+            val packet = NetworkWebRtcOffer(
+                senderId = ownPeerId,
+                receiverId = peerId,
+                sdpJson = sdpJson,
+                withVideo = withVideo,
+                ttl = 5
+            )
+            val payload = json.encodeToString(NetworkWebRtcOffer.serializer(), packet).encodeToByteArray()
+            sendPacket(peerId, PacketType.WEBRTC_OFFER, payload, "sendWebRtcOffer")
+            Log.d(TAG, "WebRTC Offer sent to ${peerId.take(8)}")
+        }
+    }
+
+    fun sendWebRtcAnswer(peerId: String, sdpJson: String) {
+        scope.launch {
+            identityReady.await()
+            val packet = NetworkWebRtcAnswer(
+                senderId = ownPeerId,
+                receiverId = peerId,
+                sdpJson = sdpJson,
+                ttl = 5
+            )
+            val payload = json.encodeToString(NetworkWebRtcAnswer.serializer(), packet).encodeToByteArray()
+            sendPacket(peerId, PacketType.WEBRTC_ANSWER, payload, "sendWebRtcAnswer")
+            Log.d(TAG, "WebRTC Answer sent to ${peerId.take(8)}")
+        }
+    }
+
+    fun sendWebRtcIceCandidate(peerId: String, candidateJson: String) {
+        scope.launch {
+            identityReady.await()
+            val packet = NetworkWebRtcIceCandidate(
+                senderId = ownPeerId,
+                receiverId = peerId,
+                candidateJson = candidateJson,
+                ttl = 5
+            )
+            val payload = json.encodeToString(NetworkWebRtcIceCandidate.serializer(), packet).encodeToByteArray()
+            sendPacket(peerId, PacketType.WEBRTC_ICE_CANDIDATE, payload, "sendWebRtcIce")
+            Log.v(TAG, "WebRTC ICE candidate sent to ${peerId.take(8)}")
+        }
+    }
+
+    // ── Остальные методы NetworkManager (без изменений) ─────────────────────
     private fun getCurrentOwnIp(): String? {
         if (receiver.isGroupOwner.value) return WiFiDirectBroadcastReceiver.GROUP_OWNER_IP
         return getP2pClientIp() ?: getLanIp()
@@ -358,11 +458,9 @@ class NetworkManager(
         return ips
     }
 
-
     private fun observeUdpPeers() {
         scope.launch {
             Log.d(TAG, "[UDP] observeUdpPeers started, ownPeerId=${ownPeerId.take(8)}")
-
             udpDiscovery.peers.collect { udpPeers ->
                 val myId = ownPeerId
                 for ((peerId, discovered) in udpPeers) {
@@ -392,7 +490,6 @@ class NetworkManager(
             }.collectLatest { (isOwner, ownerIp) ->
                 val newIp = if (isOwner) WiFiDirectBroadcastReceiver.GROUP_OWNER_IP
                 else getP2pClientIp() ?: getLanIp()
-
                 if (newIp != null && newIp != ownIpAddress) {
                     ownIpAddress = newIp
                     Log.i(TAG, "[P2P] Own IP: $newIp (isOwner=$isOwner)")
@@ -404,7 +501,6 @@ class NetworkManager(
                         publicKeyHex = if (NativeCore.isInitialized()) NativeCore.getOwnPublicKeyHex() else ""
                     )
                 }
-
                 if (!isOwner && ownerIp != null && ownerIp != ownIpAddress) {
                     Log.i(TAG, "[P2P] Connected to GO @ $ownerIp — sending direct announce (x3)")
                     saveKnownIp(ownerIp)
@@ -440,13 +536,11 @@ class NetworkManager(
             Log.i(TAG, "Force rediscover triggered")
             receiver.discoverPeers()
             getCurrentOwnIp()?.let { udpDiscovery.updateOwnIp(it) }
-            val allIps =
-                (getKnownIps() + peerRegistry.peers.value.values.mapNotNull { it.ipAddress })
-                    .filter { it.isNotBlank() }.toSet()
+            val allIps = (getKnownIps() + peerRegistry.peers.value.values.mapNotNull { it.ipAddress })
+                .filter { it.isNotBlank() }.toSet()
             for (ip in allIps) udpDiscovery.sendDirectAnnounce(ip)
         }
     }
-
 
     private fun startKeepaliveLoop() {
         scope.launch {
@@ -466,10 +560,8 @@ class NetworkManager(
                 ownIpAddress = currentIp
                 udpDiscovery.updateOwnIp(currentIp)
             }
-
             val profile = ownProfileRepository.getProfile()
             val username = profile.username.ifBlank { ownUsername }
-
             val ownDevice = NetworkDevice(
                 peerId = ownPeerId,
                 username = username,
@@ -479,19 +571,15 @@ class NetworkManager(
                 keepalive = System.currentTimeMillis(),
                 hopCount = 1
             )
-
             val knownPeers = peerRegistry.peers.value.values
                 .filter { it.shortCode.isNotBlank() && it.peerId != ownPeerId }
-
             val routingTableJson =
                 if (NativeCore.isInitialized()) NativeCore.getRoutingTableJson() else null
-
             val keepalive = NetworkKeepalive(
                 devices = listOf(ownDevice) + knownPeers,
                 senderPeerId = ownPeerId,
                 routingTableJson = routingTableJson
             )
-
             val targets = buildSet<String> {
                 if (!receiver.isGroupOwner.value) {
                     add(WiFiDirectBroadcastReceiver.GROUP_OWNER_IP)
@@ -499,7 +587,6 @@ class NetworkManager(
                 receiver.groupOwnerAddress.value?.let { if (it != currentIp) add(it) }
                 knownPeers.mapNotNull { it.ipAddress }.forEach { add(it) }
             }.filter { it != currentIp && it.isNotBlank() }
-
             for (ip in targets) {
                 val localIp = client.sendKeepaliveReturnLocalIp(ip, keepalive)
                 if (localIp != null && localIp != currentIp && localIp != "0.0.0.0") {
@@ -513,11 +600,9 @@ class NetworkManager(
         }
     }
 
-
     private fun handleKeepalive(keepalive: NetworkKeepalive, senderIp: String) {
         val now = System.currentTimeMillis()
         val ownIps = getAllOwnIps()
-
         val fromPeerId: String = keepalive.senderPeerId?.takeIf { it.isNotBlank() }
             ?: keepalive.devices.firstOrNull { d ->
                 d.peerId.isNotBlank() && d.peerId != ownPeerId &&
@@ -527,17 +612,28 @@ class NetworkManager(
                 d.peerId.isNotBlank() && d.peerId != ownPeerId
             }?.peerId
             ?: ""
-
+        if (fromPeerId == ownPeerId) {
+            Log.v(TAG, "handleKeepalive: игнорируем keepalive от самих себя (self-echo)")
+            return
+        }
         for (device in keepalive.devices) {
-            if (device.peerId.isBlank() || device.peerId == ownPeerId) continue
-
+            if (device.peerId.isBlank()) continue
+            if (device.peerId == ownPeerId) {
+                Log.v(TAG, "handleKeepalive: пропускаем собственный peerId в чужом keepalive")
+                continue
+            }
             val effectiveIp = device.ipAddress?.takeIf { it.isNotBlank() } ?: senderIp
-            if (effectiveIp in ownIps) continue
-
+            if (effectiveIp in ownIps || senderIp in ownIps) {
+                Log.v(TAG, "handleKeepalive: пропускаем устройство с нашим IP ($effectiveIp / $senderIp)")
+                continue
+            }
             val isDirectPeer = device.peerId == fromPeerId
             val hopCount = if (isDirectPeer) 1 else (device.hopCount + 1).coerceAtMost(5)
             val viaPeer = if (isDirectPeer) null else fromPeerId.takeIf { it.isNotBlank() }
-
+            if (viaPeer == ownPeerId) {
+                Log.v(TAG, "handleKeepalive: пропускаем маршрут через себя к ${device.peerId.take(8)}")
+                continue
+            }
             val updated = device.copy(
                 ipAddress = if (isDirectPeer) effectiveIp else senderIp,
                 keepalive = now,
@@ -545,20 +641,17 @@ class NetworkManager(
                 viaPeerId = viaPeer
             )
             peerRegistry.upsert(updated, "keepalive")
-
             if (isDirectPeer) {
                 saveKnownIp(effectiveIp)
                 scope.launch { requestProfileIfNeeded(device.peerId, effectiveIp) }
             }
-
             if (peerRegistry.isNewPeer(device.peerId) && isDirectPeer) {
                 udpDiscovery.sendDirectAnnounce(effectiveIp)
             }
         }
-
         if (NativeCore.isInitialized() && fromPeerId.isNotBlank()) {
             val peers = keepalive.devices
-                .filter { it.peerId != ownPeerId && it.peerId != fromPeerId }
+                .filter { it.peerId != ownPeerId && it.peerId != fromPeerId && it.peerId.isNotBlank() }
                 .map { d ->
                     org.json.JSONObject().apply {
                         put("peerId", d.peerId)
@@ -569,7 +662,6 @@ class NetworkManager(
             val peersJson = org.json.JSONArray(peers).toString()
             NativeCore.updateRoutingTable(fromPeerId, senderIp, peersJson)
         }
-
         keepalive.routingTableJson?.let { rtJson ->
             if (rtJson.isNotBlank() && rtJson != "[]" && fromPeerId.isNotBlank()) {
                 processRemoteRoutingTable(rtJson, senderIp, fromPeerId)
@@ -581,11 +673,18 @@ class NetworkManager(
         try {
             val arr = org.json.JSONArray(rtJson)
             val now = System.currentTimeMillis()
+            var added = 0
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
                 val peerId = obj.optString("peerId")
                 val hops = obj.optInt("hops", 1)
-                if (peerId.isNotBlank() && peerId != ownPeerId && hops < 5) {
+                if (peerId.isBlank()) continue
+                if (peerId == ownPeerId) {
+                    Log.v(TAG, "processRemoteRoutingTable: пропускаем собственный peerId")
+                    continue
+                }
+                if (peerId == viaPeerId) continue
+                if (hops < 5) {
                     val existing = peerRegistry.peers.value[peerId]
                     if (existing == null) {
                         peerRegistry.upsert(
@@ -595,9 +694,11 @@ class NetworkManager(
                                 hopCount = hops + 1, viaPeerId = viaPeerId
                             ), "mesh-rt"
                         )
+                        added++
                     }
                 }
             }
+            if (added > 0) Log.d(TAG, "processRemoteRoutingTable: добавлено $added mesh-маршрутов от ${viaPeerId.take(8)}")
         } catch (e: Exception) {
             Log.w(TAG, "processRemoteRoutingTable error: ${e.message}")
         }
@@ -633,7 +734,6 @@ class NetworkManager(
                     imageFileName = imageFileName
                 )
             )
-
             synchronized(profileLock) {
                 profileCache[res.senderId] = newTimestamp
                 profileRequestInFlight.remove(res.senderId)
@@ -663,13 +763,10 @@ class NetworkManager(
             )
             contactRepository.addOrUpdateAccount(Account(msg.senderId, System.currentTimeMillis()))
             sendAckReceived(msg.senderId, msg.messageId)
-
-
             if (!AppForegroundTracker.isInForeground()) {
                 val contact = contactRepository.getAllContactsAsFlow().first()
                     .find { it.peerId == msg.senderId }
-                val senderName = contact?.username
-                    ?: msg.senderId.take(8).uppercase()
+                val senderName = contact?.username ?: msg.senderId.take(8).uppercase()
                 NotificationHelper.showMessageNotification(
                     context = context,
                     senderName = senderName,
@@ -703,7 +800,6 @@ class NetworkManager(
             )
             contactRepository.addOrUpdateAccount(Account(msg.senderId, System.currentTimeMillis()))
             sendAckReceived(msg.senderId, msg.messageId)
-
             if (!AppForegroundTracker.isInForeground()) {
                 val contact = contactRepository.getAllContactsAsFlow().first()
                     .find { it.peerId == msg.senderId }
@@ -745,7 +841,6 @@ class NetworkManager(
             )
             contactRepository.addOrUpdateAccount(Account(msg.senderId, System.currentTimeMillis()))
             sendAckReceived(msg.senderId, msg.messageId)
-
             if (!AppForegroundTracker.isInForeground()) {
                 val contact = contactRepository.getAllContactsAsFlow().first()
                     .find { it.peerId == msg.senderId }
@@ -768,31 +863,25 @@ class NetworkManager(
         scope.launch { chatRepository.updateMessageState(ack.messageId, MessageState.MESSAGE_READ) }
     }
 
-
     private fun resolveNextHop(peerId: String): Pair<String?, String?> {
         val directIp = peerRegistry.getIp(peerId)
         val device = peerRegistry.peers.value[peerId]
-
         if (directIp != null && (device?.isDirect == true || device?.hopCount == 1)) {
             return Pair(directIp, null)
         }
-
         if (NativeCore.isInitialized()) {
             val nextHopIp = NativeCore.getNextHopIp(peerId)
             if (nextHopIp.isNotBlank()) {
                 return Pair(nextHopIp, null)
             }
         }
-
         if (device?.viaPeerId != null) {
             val viaIp = peerRegistry.getIp(device.viaPeerId)
             if (viaIp != null) {
                 return Pair(viaIp, null)
             }
         }
-
         if (directIp != null) return Pair(directIp, null)
-
         return Pair(null, peerRegistry.getBluetoothAddress(peerId))
     }
 
@@ -803,7 +892,6 @@ class NetworkManager(
         ctx: String
     ): Boolean {
         val (ip, btAddress) = resolveNextHop(peerId)
-
         if (ip != null) {
             try {
                 client.sendRaw(ip, type, payload)
@@ -813,12 +901,10 @@ class NetworkManager(
                 removeKnownIp(ip)
             }
         }
-
         if (btAddress != null && bluetoothTransport.isAvailable()) {
             val ok = bluetoothTransport.sendPacket(btAddress, type, payload)
             if (ok) return true
         }
-
         if (ip == null && btAddress == null) {
             Log.w(TAG, "$ctx: no route to ${peerId.take(8)}")
         }
@@ -879,38 +965,37 @@ class NetworkManager(
 
     fun sendCallRequest(peerId: String) {
         val ip = peerRegistry.getIp(peerId) ?: run {
-            Log.w("NetworkManager", "sendCallRequest: no IP for ${peerId.take(8)}")
+            Log.w(TAG, "sendCallRequest: no IP for ${peerId.take(8)}")
             return
         }
         scope.launch {
-            // 3 попытки — TCP может не пройти с первой в нестабильной mesh-сети
             repeat(3) { attempt ->
                 try {
                     client.sendCallRequest(ip, NetworkCallRequest(ownPeerId, peerId))
-                    Log.d("NetworkManager", "sendCallRequest OK (attempt ${attempt + 1}) → $ip")
+                    Log.d(TAG, "sendCallRequest OK (attempt ${attempt + 1}) → $ip")
                     return@launch
                 } catch (e: Exception) {
-                    Log.w("NetworkManager", "sendCallRequest attempt ${attempt + 1} failed: ${e.message}")
+                    Log.w(TAG, "sendCallRequest attempt ${attempt + 1} failed: ${e.message}")
                     if (attempt < 2) delay(500)
                 }
             }
-            Log.e("NetworkManager", "sendCallRequest FAILED after 3 attempts → $ip")
+            Log.e(TAG, "sendCallRequest FAILED after 3 attempts → $ip")
         }
     }
 
     fun sendCallResponse(peerId: String, accepted: Boolean) {
         val ip = peerRegistry.getIp(peerId) ?: run {
-            Log.w("NetworkManager", "sendCallResponse: no IP for ${peerId.take(8)}")
+            Log.w(TAG, "sendCallResponse: no IP for ${peerId.take(8)}")
             return
         }
         scope.launch {
             repeat(3) { attempt ->
                 try {
                     client.sendCallResponse(ip, NetworkCallResponse(ownPeerId, peerId, accepted))
-                    Log.d("NetworkManager", "sendCallResponse accepted=$accepted OK (attempt ${attempt + 1}) → $ip")
+                    Log.d(TAG, "sendCallResponse accepted=$accepted OK (attempt ${attempt + 1}) → $ip")
                     return@launch
                 } catch (e: Exception) {
-                    Log.w("NetworkManager", "sendCallResponse attempt ${attempt + 1} failed: ${e.message}")
+                    Log.w(TAG, "sendCallResponse attempt ${attempt + 1} failed: ${e.message}")
                     if (attempt < 2) delay(500)
                 }
             }
@@ -919,7 +1004,7 @@ class NetworkManager(
 
     fun sendCallEnd(peerId: String) {
         val ip = peerRegistry.getIp(peerId) ?: run {
-            Log.w("NetworkManager", "sendCallEnd: no IP for ${peerId.take(8)}")
+            Log.w(TAG, "sendCallEnd: no IP for ${peerId.take(8)}")
             return
         }
         scope.launch {
@@ -928,7 +1013,7 @@ class NetworkManager(
                     client.sendCallEnd(ip, NetworkCallEnd(ownPeerId, peerId))
                     return@launch
                 } catch (e: Exception) {
-                    Log.w("NetworkManager", "sendCallEnd attempt ${attempt + 1} failed: ${e.message}")
+                    Log.w(TAG, "sendCallEnd attempt ${attempt + 1} failed: ${e.message}")
                     if (attempt < 1) delay(300)
                 }
             }
@@ -945,28 +1030,25 @@ class NetworkManager(
         _callResponse.value = null
         _callEnd.value = null
         _callFragment.value = null
-
+        _webRtcOffer.value = null
+        _webRtcAnswer.value = null
+        _webRtcIceCandidate.value = null
         NotificationHelper.dismissCallNotification(context)
     }
 
-
     private suspend fun requestProfileIfNeeded(peerId: String, ip: String) {
         if (peerId == ownPeerId || peerId.isBlank()) return
-
-
         val contact = try {
             contactRepository.getAllContactsAsFlow().first().find { it.peerId == peerId }
         } catch (e: Exception) {
             null
         }
         val localTimestamp = contact?.account?.profileUpdateTimestamp ?: 0L
-
         val shouldRequest = synchronized(profileLock) {
             if (peerId in profileRequestInFlight) {
                 false
             } else {
                 val cachedTimestamp = profileCache[peerId] ?: -1L
-
                 if (cachedTimestamp < 0L || localTimestamp > cachedTimestamp) {
                     profileRequestInFlight.add(peerId)
                     true
@@ -976,7 +1058,6 @@ class NetworkManager(
             }
         }
         if (!shouldRequest) return
-
         identityReady.await()
         Log.d(TAG, "[PROFILE] Requesting from ${peerId.take(8)} @ $ip")
         try {
@@ -1009,7 +1090,6 @@ class NetworkManager(
         }
     }
 
-
     fun startDiscoverPeersHandler() {
         scope.launch {
             while (isActive) {
@@ -1022,7 +1102,6 @@ class NetworkManager(
 
     fun startSendKeepaliveHandler() {}
     fun startUpdateConnectedDevicesHandler() {}
-
 
     private fun initNsdDiscovery() {
         nsdDiscovery = NsdDiscovery(
@@ -1052,15 +1131,12 @@ class NetworkManager(
         }
     }
 
-
-
     private fun warmupProfileCache() {
         scope.launch {
             try {
                 contactRepository.getAllContactsAsFlow().first().forEach { contact ->
                     if (contact.profile != null) {
                         synchronized(profileLock) {
-
                             profileCache[contact.peerId] = contact.profile.updateTimestamp
                         }
                     }
@@ -1072,6 +1148,7 @@ class NetworkManager(
     }
 
     fun getIpForPeer(peerId: String): String? = peerRegistry.getIp(peerId)
+
     fun removePeerFromRegistry(peerId: String) {
         peerRegistry.remove(peerId)
         if (NativeCore.isInitialized()) NativeCore.removeRoute(peerId)
@@ -1081,7 +1158,6 @@ class NetworkManager(
         }
         Log.d(TAG, "Removed peer ${peerId.take(8)} from registry")
     }
-
 
     fun stop() {
         nsdDiscovery?.stop()
